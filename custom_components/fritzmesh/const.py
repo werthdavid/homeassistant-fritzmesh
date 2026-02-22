@@ -1,0 +1,13 @@
+DOMAIN = "fritzmesh"
+
+CONF_HOST = "host"
+CONF_PORT = "port"
+CONF_USERNAME = "username"
+CONF_PASSWORD = "password"
+CONF_USE_TLS = "use_tls"
+CONF_POLL_INTERVAL = "poll_interval"
+
+DEFAULT_HOST = "192.168.178.1"
+DEFAULT_PORT = 49000
+DEFAULT_USE_TLS = False
+DEFAULT_POLL_INTERVAL = 60

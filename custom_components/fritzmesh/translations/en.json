@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "FRITZ! Mesh Setup",
+        "description": "Enter your FRITZ!Box connection details.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "use_tls": "Use TLS (HTTPS)",
+          "poll_interval": "Poll interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to FRITZ!Box. Check host, port and TLS setting.",
+      "invalid_auth": "Invalid username or password.",
+      "unknown": "Unexpected error — check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This FRITZ!Box is already configured."
+    }
+  }
+}

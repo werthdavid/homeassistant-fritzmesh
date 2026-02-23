@@ -59,7 +59,7 @@ const esc = (s) =>
 
 function fmtSpeed(kbps) {
   if (!kbps || kbps <= 0) return null;
-  if (kbps >= 1_000_000) return `${(kbps / 1_000_000).toFixed(0)} Gbit/s`;
+  if (kbps >= 1_000_000) return `${(kbps / 1_000_000).toFixed(1)} Gbit/s`;
   if (kbps >= 1_000)     return `${Math.round(kbps / 1_000)} Mbit/s`;
   return `${kbps} kbit/s`;
 }

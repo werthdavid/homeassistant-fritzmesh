@@ -4,6 +4,12 @@ Shows which devices are connected to which mesh node (FRITZ!Box master or repeat
 
 <img src="meshcard.png" width="400">
 
+:exclamation: **This is an unofficial component that is not officially supported by FRITZ!/AVM**
+
+Disclaimer: No Affiliation with AVM Fritz!
+This project is an independent, open-source software developed by David Werth. 
+It is not affiliated with, endorsed by, sponsored by, or otherwise connected to AVM GmbH (the makers of FRITZ! products) in any way. 
+I have no business relationship with AVM, and this software is provided for informational purposes only.
 
 ## Features
 

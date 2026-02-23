@@ -1,20 +1,53 @@
 /**
  * Fritz!Box Mesh Topology Card  –  v1.1.0
  *
- * Visualises the mesh network tree: master Fritz!Box → slave repeaters → clients.
- * Solid green lines = LAN · dashed green lines = WiFi
+ * A custom Lovelace card that visualises the Fritz!Box mesh network as a
+ * hierarchical tree diagram:
  *
- * Card config:
+ *   ┌──────────┐        Clients
+ *   │ Fritz!Box│ ────── ≡ Laptop (WiFi 5 GHz → 867 Mbit/s)
+ *   │  7590 AX │ ────── ≡ Desktop (LAN → 1 Gbit/s)
+ *   └──────────┘
+ *        │
+ *    ....│ WiFi
+ *   ┌──────────┐        Clients
+ *   │ Repeater │ ────── ≡ Phone (WiFi 2.4 GHz → 144 Mbit/s)
+ *   └──────────┘
+ *
+ * Visual conventions:
+ *   Solid green line  = LAN connection
+ *   Dashed green line = WiFi connection
+ *   Reduced opacity   = device is disconnected
+ *
+ * Card YAML configuration:
  *   type: custom:fritzmesh-card
- *   entity: sensor.fritzmesh_topology
- *   title: Fritz!Box Mesh              # optional; set "" to hide
+ *   entity: sensor.fritzmesh_topology   # required – the FritzMeshTopologySensor
+ *   title: Fritz!Box Mesh               # optional; omit to use default title,
+ *                                       # set to "" to hide the header entirely
+ *
+ * Data flow:
+ *   Home Assistant state machine
+ *     → set hass()          (called on every HA state update)
+ *       → _render()         (only if topology attributes changed)
+ *         → _masterPanel()  (left sticky panel: router icon + device info)
+ *         → _masterSection() (direct clients of the master)
+ *         → _slaveSection()  (one section per repeater + its clients)
+ *         → _clientRow()     (individual device rows with speed/band label)
  */
 
 const CARD_VERSION = "1.1.0";
 
-// ── Inline SVG icons (no external dependency needed) ──────────────────────────
+// ── Inline SVG icons ──────────────────────────────────────────────────────────
+//
+// All icons are Material Design SVGs embedded as strings.  Using inline SVGs
+// avoids any dependency on external icon libraries (like mdi) that might not
+// be available when the card is first loaded.
+//
+// Each icon is stored as a string of raw <svg> markup so it can be inserted
+// directly into innerHTML without escaping.
 
 const ICON = {
+  // Router icon – used for the master Fritz!Box panel on the left.
   router: `<svg viewBox="0 0 24 24" fill="currentColor">
     <path d="M20.2 5.9l.8-.8C19.6 3.7 17.9 3 16 3s-3.6.7-4.8 1.8l.8.8C13 4.6
     14.4 4 16 4s3 .6 4.2 1.9zM19.4 6.7c-.9-.9-2.1-1.4-3.4-1.4s-2.5.5-3.4
@@ -23,6 +56,8 @@ const ICON = {
     2-2v-4c0-1.1-.9-2-2-2zm0 6H4v-4h15v4zM6 17.5C6 18.3 5.3 19 4.5
     19S3 18.3 3 17.5 3.7 16 4.5 16 6 16.7 6 17.5z"/>
   </svg>`,
+
+  // Access point / repeater icon – used in slave node cards.
   ap: `<svg viewBox="0 0 24 24" fill="currentColor">
     <path d="M12 3C6.95 3 3.15 5.85 2 9.7L3.72 10C4.73 6.79 8.1 4.5 12
     4.5c3.9 0 7.27 2.29 8.28 5.5L22 9.7C20.85 5.85 17.05 3 12 3zm0
@@ -30,16 +65,22 @@ const ICON = {
     3.4 2.38l1.8-.5C16.44 8.46 14.44 7 12 7zm0 4c-1.1 0-2 .9-2 2s.9 2 2
     2 2-.9 2-2-.9-2-2-2zm0 5c-.55 0-1 .45-1 1v4h2v-4c0-.55-.45-1-1-1z"/>
   </svg>`,
+
+  // WiFi signal icon – shown next to wireless client rows.
   wifi: `<svg viewBox="0 0 24 24" fill="currentColor">
     <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93
     1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76
     10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
   </svg>`,
+
+  // Ethernet plug icon – shown next to wired client rows.
   lan: `<svg viewBox="0 0 24 24" fill="currentColor">
     <path d="M8 3H5L2 7l3 4h3l1.5 2H9c-1.1 0-2 .9-2 2v4c0 1.1.9 2 2
     2h6c1.1 0 2-.9 2-2v-4c0-1.1-.9-2-2-2h-1.5L15 11h3l3-4-3-4h-3l-3
     4v.17L10 8.83V8l-2-5zm1 10h6v4H9v-4z"/>
   </svg>`,
+
+  // Question-mark circle – used for the "Unassigned" section and error state.
   unknown: `<svg viewBox="0 0 24 24" fill="currentColor">
     <path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10
     10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8
@@ -48,8 +89,21 @@ const ICON = {
   </svg>`,
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Utility helpers ───────────────────────────────────────────────────────────
 
+/**
+ * HTML-escape a value for safe insertion into innerHTML.
+ *
+ * Converts the value to a string (treating null/undefined as ""), then
+ * replaces the five characters that have special meaning in HTML:
+ *   &  →  &amp;
+ *   <  →  &lt;
+ *   >  →  &gt;
+ *   "  →  &quot;
+ *
+ * @param {*} s - Value to escape (anything with a toString method).
+ * @returns {string} HTML-safe string ready for insertion into innerHTML.
+ */
 const esc = (s) =>
   String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -57,6 +111,18 @@ const esc = (s) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
+/**
+ * Format a speed value from kbit/s to a human-readable string.
+ *
+ * The Fritz!Box reports all speeds in kbit/s.  This function converts them to
+ * the most appropriate unit:
+ *   ≥ 1 000 000 kbit/s → Gbit/s  (e.g. 2 500 000 → "2.5 Gbit/s")
+ *   ≥ 1 000 kbit/s     → Mbit/s  (e.g.   867 000 → "867 Mbit/s")
+ *   < 1 000 kbit/s     → kbit/s  (e.g.       720 → "720 kbit/s")
+ *
+ * @param {number|null|undefined} kbps - Speed in kbit/s.
+ * @returns {string|null} Formatted string, or null if the value is falsy/zero.
+ */
 function fmtSpeed(kbps) {
   if (!kbps || kbps <= 0) return null;
   if (kbps >= 1_000_000) return `${(kbps / 1_000_000).toFixed(1)} Gbit/s`;
@@ -64,73 +130,205 @@ function fmtSpeed(kbps) {
   return `${kbps} kbit/s`;
 }
 
+/**
+ * Extract the WiFi frequency band from a Fritz!Box interface name string.
+ *
+ * Fritz!Box encodes band and radio information in the interface name field,
+ * for example:
+ *   "AP:5G:0"   → 5 GHz WiFi
+ *   "AP:2G:0"   → 2.4 GHz WiFi
+ *   "LAN:1"     → Wired Ethernet port 1
+ *   "ETH:0"     → Wired Ethernet (alternative naming)
+ *
+ * @param {string|null|undefined} ifaceName - The interface_name field from the topology.
+ * @returns {string|null} Human-readable band/medium string, or null if unrecognised.
+ */
 function getBand(ifaceName) {
   if (!ifaceName) return null;
   const u = ifaceName.toUpperCase();
-  if (u.includes("5G"))                         return "5 GHz";
-  if (u.includes("2G") || u.startsWith("AP:2")) return "2,4 GHz";
+  if (u.includes("5G"))                          return "5 GHz";
+  if (u.includes("2G") || u.startsWith("AP:2"))  return "2,4 GHz";   // German decimal comma
   if (u.startsWith("LAN") || u.startsWith("ETH")) return "LAN";
   return null;
 }
 
+/**
+ * Build the connection label string shown next to each client row.
+ *
+ * Examples:
+ *   WiFi client on 5 GHz at 867 Mbit/s → "5 GHz → 867 Mbit/s"
+ *   WiFi client, no speed data          → "WiFi"
+ *   LAN client at 1 Gbit/s             → "LAN → 1.0 Gbit/s"
+ *   LAN client, no speed data          → "LAN"
+ *
+ * For WiFi clients, we prefer cur_rx_kbps (current actual speed) over
+ * max_rx_kbps (negotiated maximum) because the current speed is more
+ * informative.  For LAN clients, max speed is usually the more stable
+ * and reliable number.
+ *
+ * @param {Object} c - Client object from the topology attributes.
+ * @param {string} c.connection_type  - "WLAN" or "LAN".
+ * @param {string} c.interface_name   - Fritz!Box interface name (for band detection).
+ * @param {number} c.cur_rx_kbps      - Current receive throughput in kbit/s.
+ * @param {number} c.max_rx_kbps      - Maximum (negotiated) receive speed in kbit/s.
+ * @returns {string} Connection label suitable for display in the card.
+ */
 function connLabel(c) {
   if (c.connection_type === "WLAN") {
+    // Derive band from interface name; fall back to generic "WiFi" label.
     const band = getBand(c.interface_name) ?? "WiFi";
+    // Prefer current speed; fall back to negotiated max if current is zero.
     const spd  = fmtSpeed(c.cur_rx_kbps || c.max_rx_kbps);
     return spd ? `${band} → ${spd}` : band;
   }
+  // LAN: prefer max speed (more stable than instantaneous current speed).
   const spd = fmtSpeed(c.max_rx_kbps || c.cur_rx_kbps);
   return spd ? `LAN → ${spd}` : "LAN";
 }
 
+/**
+ * Comparator for sorting client device arrays.
+ *
+ * Sort order:
+ *   1. Connected devices before disconnected ones (so active devices are
+ *      always visible at the top of each mesh node's client list).
+ *   2. Alphabetically by name (falling back to MAC address if no name).
+ *
+ * Designed for use with Array.prototype.sort().
+ *
+ * @param {Object} a - First client object.
+ * @param {Object} b - Second client object.
+ * @returns {number} Negative if a < b, positive if a > b, 0 if equal.
+ */
 const clientSort = (a, b) => {
+  // Primary sort: connection state.  "CONNECTED" sorts before everything else.
   if (a.connection_state !== b.connection_state)
     return a.connection_state === "CONNECTED" ? -1 : 1;
+  // Secondary sort: alphabetical by display name, falling back to MAC.
   return (a.name || a.mac || "").localeCompare(b.name || b.mac || "");
 };
 
 // ── Card component ─────────────────────────────────────────────────────────────
+//
+// FritzMeshCard is a standard Web Component (extends HTMLElement).
+// Home Assistant requires custom cards to:
+//   1. Extend HTMLElement (not LitElement or any other framework class).
+//   2. Implement setConfig(config) to accept card YAML configuration.
+//   3. Implement a `set hass(hass)` setter called whenever HA state changes.
+//   4. Optionally implement getCardSize() to help the layout engine.
+//   5. Register with customElements.define().
 
 class FritzMeshCard extends HTMLElement {
   constructor() {
     super();
+    // Attach a Shadow DOM to encapsulate styles from the rest of the dashboard.
+    // mode: "open" allows external JS to access shadowRoot if needed.
     this.attachShadow({ mode: "open" });
+
+    // _config stores the card YAML options set by setConfig().
     this._config  = null;
+
+    // _lastKey is a JSON snapshot of the previous state attributes.
+    // We compare it on every `set hass()` call to skip re-renders when
+    // nothing has changed, avoiding unnecessary DOM updates.
     this._lastKey = "";
   }
 
+  /**
+   * Return a minimal stub configuration so the card editor can show a preview.
+   * Called by the HA dashboard editor when the user selects this card type.
+   *
+   * @returns {Object} Default card configuration.
+   */
   static getStubConfig() {
     return { entity: "sensor.fritzmesh_topology" };
   }
 
+  /**
+   * Accept the card configuration from the YAML/UI editor.
+   *
+   * Called by HA once when the card is first created (or when the user edits
+   * the YAML).  Must throw an Error if the configuration is invalid, because
+   * HA will display that error message to the user.
+   *
+   * @param {Object} config - Parsed card YAML as a plain object.
+   * @param {string} config.entity - Entity ID of the FritzMeshTopologySensor.
+   * @param {string} [config.title] - Optional card header text.
+   * @throws {Error} If `entity` is missing from the configuration.
+   */
   setConfig(config) {
     if (!config.entity)
       throw new Error("fritzmesh-card: set `entity` to your topology sensor.");
     this._config = config;
   }
 
+  /**
+   * Receive the latest HA state from the dashboard.
+   *
+   * HA calls this setter whenever *any* entity state changes, not just the
+   * one this card cares about.  We therefore:
+   *   1. Look up only our configured entity in hass.states.
+   *   2. Serialise its attributes to a JSON string.
+   *   3. Compare with the previous serialisation (_lastKey).
+   *   4. Only re-render if something actually changed.
+   *
+   * @param {Object} hass - The full Home Assistant state object.
+   */
   set hass(hass) {
     if (!this._config) return;
+
     const state = hass?.states?.[this._config.entity];
+    // Serialise the entire attributes object as a cache key.
+    // Using JSON.stringify on attributes catches any nested change.
     const key   = JSON.stringify(state?.attributes);
+
+    // Bail out early if the attributes haven't changed since the last render.
     if (key === this._lastKey) return;
+
     this._lastKey = key;
     this._render(state);
   }
 
+  /**
+   * Estimate the card height in grid rows for the dashboard layout engine.
+   *
+   * HA uses this value to pre-allocate space in the grid before the card
+   * renders.  We compute it from the number of nodes and total client count
+   * to produce a reasonable estimate.
+   *
+   * Formula: max(4, ceil((nodes × 3 + totalClients) / 4))
+   *   - Each mesh node contributes ~3 rows (header + a few clients).
+   *   - Each client contributes 1 row.
+   *   - Minimum size is 4 rows so the card is never tiny.
+   *
+   * @returns {number} Estimated height in grid rows (integer ≥ 4).
+   */
   getCardSize() {
     const nodes   = this._lastKey ? (JSON.parse(this._lastKey)?.mesh_nodes ?? []) : [];
     const clients = nodes.reduce((s, n) => s + (n.clients?.length ?? 0), 0);
     return Math.max(4, Math.ceil((nodes.length * 3 + clients) / 4));
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
 
+  /**
+   * Main render method: build the full card HTML from the entity state.
+   *
+   * Called by the `set hass()` setter only when the topology attributes have
+   * changed.  Sets the shadow DOM innerHTML via _setHTML().
+   *
+   * @param {Object|undefined} state - HA entity state object, or undefined if
+   *                                   the entity doesn't exist yet.
+   */
   _render(state) {
+    // Determine the card title.  config.title=undefined → use default.
+    // config.title="" → hide the header entirely (by passing an empty string
+    // to _setHTML which renders no header element for falsy values).
     const title = this._config.title !== undefined
       ? this._config.title
       : "Fritz!Box Mesh Topology";
 
+    // Handle missing or unavailable entity state.
     if (!state || state.state === "unavailable") {
       this._setHTML(title, `
         <div class="msg warn">
@@ -140,20 +338,28 @@ class FritzMeshCard extends HTMLElement {
       return;
     }
 
+    // Extract the topology data from the entity's extra_state_attributes.
     const attrs      = state.attributes ?? {};
-    const nodes      = attrs.mesh_nodes ?? [];
-    const unassigned = attrs.unassigned_clients ?? [];
-    const host       = attrs.host ?? "";
+    const nodes      = attrs.mesh_nodes ?? [];         // array of mesh node objects
+    const unassigned = attrs.unassigned_clients ?? []; // clients with no known parent node
+    const host       = attrs.host ?? "";               // Fritz!Box IP for display
 
+    // Show a placeholder while waiting for the first coordinator update.
     if (!nodes.length) {
       this._setHTML(title,
         `<div class="msg">No topology data yet — waiting for first coordinator update.</div>`);
       return;
     }
 
+    // Identify the master node (role === "master") and all slave repeaters.
+    // The topology sensor always sorts master first, but we find it explicitly
+    // for clarity and resilience.
     const master = nodes.find((n) => n.role === "master") ?? nodes[0];
-    const slaves = nodes.filter((n) => n !== master);
+    const slaves  = nodes.filter((n) => n !== master);
 
+    // Build the two-column layout:
+    //   Left  → sticky master panel (blue gradient card with router icon)
+    //   Right → scrollable tree of sections (master clients, then each slave)
     this._setHTML(title, `
       <div class="layout">
         ${this._masterPanel(master, host)}
@@ -165,8 +371,18 @@ class FritzMeshCard extends HTMLElement {
       </div>`);
   }
 
-  // ── Left panel ──────────────────────────────────────────────────────────
+  // ── Left panel ─────────────────────────────────────────────────────────────
 
+  /**
+   * Render the left-hand master Fritz!Box panel.
+   *
+   * This panel is sticky-positioned so it stays visible while the user scrolls
+   * through a long list of slaves and clients on the right.
+   *
+   * @param {Object} node - The master MeshNode object from topology attributes.
+   * @param {string} host - Fritz!Box IP/hostname from the topology attributes.
+   * @returns {string} HTML string for the master panel div.
+   */
   _masterPanel(node, host) {
     return `
       <div class="master-panel">
@@ -179,9 +395,19 @@ class FritzMeshCard extends HTMLElement {
       </div>`;
   }
 
-  // ── Master section (direct clients) ─────────────────────────────────────
+  // ── Master section ─────────────────────────────────────────────────────────
 
+  /**
+   * Render the section showing clients directly connected to the master node.
+   *
+   * This is always the first section in the tree column.  Clients are sorted
+   * (connected first, then alphabetically) before rendering.
+   *
+   * @param {Object} node - The master MeshNode object.
+   * @returns {string} HTML string for the master clients section.
+   */
   _masterSection(node) {
+    // Sort a copy to avoid mutating the original attribute array.
     const clients = [...(node?.clients ?? [])].sort(clientSort);
     return `
       <div class="section">
@@ -196,19 +422,36 @@ class FritzMeshCard extends HTMLElement {
       </div>`;
   }
 
-  // ── Slave section ────────────────────────────────────────────────────────
+  // ── Slave section ──────────────────────────────────────────────────────────
 
+  /**
+   * Render one section for a slave (repeater) mesh node and its clients.
+   *
+   * Each slave section shows:
+   *   • A horizontal branch line from the backbone (solid=LAN, dashed=WiFi)
+   *   • A badge ("LAN" or "WiFi") indicating how the slave connects to master
+   *   • A slave card with the AP icon, repeater name, model, and badge
+   *   • A list of client rows for devices connected to this repeater
+   *
+   * @param {Object} node - A slave MeshNode object from topology attributes.
+   * @returns {string} HTML string for the slave section.
+   */
   _slaveSection(node) {
     const clients  = [...(node?.clients ?? [])].sort(clientSort);
+    // parent_link_type is "WLAN" or "LAN"; default to "LAN" if missing.
     const linkType = node.parent_link_type || "LAN";
     const isWifi   = linkType === "WLAN";
 
     return `
       <div class="section">
         <div class="section-row">
+          <!-- Branch line: dashed for WiFi, solid for LAN -->
           <div class="h-line ${isWifi ? "wifi" : "lan"}"></div>
+          <!-- Badge indicating the uplink medium to the parent mesh node -->
           <span class="row-label ${isWifi ? "wifi-label" : "lan-label"}">${isWifi ? "WiFi" : "LAN"}</span>
+          <!-- Slave device card -->
           <div class="slave-card">
+            <!-- Icon colour: blue for LAN-connected repeater, green for WiFi-connected -->
             <div class="sc-icon ${isWifi ? "sc-wifi" : "sc-lan"}">${ICON.ap}</div>
             <div class="sc-info">
               <div class="sc-name">${esc(node.name)}</div>
@@ -217,6 +460,7 @@ class FritzMeshCard extends HTMLElement {
             </div>
           </div>
         </div>
+        <!-- Client list for this repeater -->
         <div class="clients">
           ${clients.length
             ? clients.map((c) => this._clientRow(c)).join("")
@@ -225,8 +469,22 @@ class FritzMeshCard extends HTMLElement {
       </div>`;
   }
 
-  // ── Unassigned section ───────────────────────────────────────────────────
+  // ── Unassigned section ─────────────────────────────────────────────────────
 
+  /**
+   * Render a section for clients that couldn't be assigned to any mesh node.
+   *
+   * Unassigned clients are rare in practice but can occur when the Fritz!Box
+   * reports a device in its host table but not in the mesh link graph (e.g.
+   * a device that was recently connected and is being tracked by the router
+   * but whose link entry has already expired).
+   *
+   * The section is visually distinguished by a dashed border and reduced
+   * opacity on the "Unassigned" card, and uses the unknown icon.
+   *
+   * @param {Array} clients - Array of unassigned client objects.
+   * @returns {string} HTML string for the unassigned section.
+   */
   _unassignedSection(clients) {
     return `
       <div class="section">
@@ -247,26 +505,63 @@ class FritzMeshCard extends HTMLElement {
       </div>`;
   }
 
-  // ── Client row ───────────────────────────────────────────────────────────
+  // ── Client row ─────────────────────────────────────────────────────────────
 
+  /**
+   * Render a single client device row.
+   *
+   * Each row contains (left to right):
+   *   • A short horizontal line (solid=LAN, dashed=WiFi) connecting to the
+   *     section backbone
+   *   • A speed/band label (e.g. "5 GHz → 867 Mbit/s") from connLabel()
+   *   • A small WiFi or LAN icon
+   *   • The device name (hostname), highlighted in blue when connected
+   *   • The IP address in monospace, if available
+   *
+   * Disconnected clients receive the ".off" CSS class which reduces opacity
+   * to 38%, making them visually subordinate to connected devices.
+   *
+   * @param {Object} client - Client object from the topology attributes.
+   * @param {string} client.connection_state - "CONNECTED" or other.
+   * @param {string} client.connection_type  - "WLAN" or "LAN".
+   * @param {string} [client.name]           - Device hostname.
+   * @param {string} [client.mac]            - MAC address (fallback display name).
+   * @param {string} [client.ip]             - IPv4 address.
+   * @returns {string} HTML string for the client row div.
+   */
   _clientRow(client) {
-    const on    = client.connection_state === "CONNECTED";
-    const wifi  = client.connection_type === "WLAN";
-    const label = connLabel(client);
-    const name  = client.name || client.mac || "?";
+    const on    = client.connection_state === "CONNECTED";  // true → active/bright
+    const wifi  = client.connection_type  === "WLAN";       // true → WiFi, false → LAN
+    const label = connLabel(client);                         // "5 GHz → 867 Mbit/s" etc.
+    const name  = client.name || client.mac || "?";         // display name fallback chain
 
     return `
       <div class="client-row${on ? "" : " off"}">
+        <!-- Branch line: dashed for WiFi, solid for LAN -->
         <div class="cl-line ${wifi ? "wifi" : "lan"}"></div>
+        <!-- Speed / band label -->
         <span class="cl-label">${esc(label)}</span>
+        <!-- Connection type icon (WiFi waves or Ethernet plug) -->
         <span class="cl-icon">${wifi ? ICON.wifi : ICON.lan}</span>
+        <!-- Device hostname -->
         <span class="cl-name">${esc(name)}</span>
+        <!-- IP address (shown only when known) -->
         ${client.ip ? `<span class="cl-ip">${esc(client.ip)}</span>` : ""}
       </div>`;
   }
 
-  // ── Scaffold ─────────────────────────────────────────────────────────────
+  // ── Scaffold ───────────────────────────────────────────────────────────────
 
+  /**
+   * Write the complete card HTML to the shadow DOM.
+   *
+   * Wraps `body` in an <ha-card> element (HA's standard card web component)
+   * with an optional header.  The <style> block is injected first so the
+   * shadow DOM's scoped CSS applies to everything inside.
+   *
+   * @param {string} title - Card header text.  If falsy, no header is rendered.
+   * @param {string} body  - Inner HTML to place inside the card body div.
+   */
   _setHTML(title, body) {
     this.shadowRoot.innerHTML = `
       <style>${STYLES}</style>
@@ -277,24 +572,42 @@ class FritzMeshCard extends HTMLElement {
   }
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────
+//
+// All CSS is scoped to the shadow DOM, so it cannot leak into the surrounding
+// Lovelace dashboard and vice versa.  We use CSS custom properties (variables)
+// to pull colours from the active HA theme where possible.
+//
+// Layout summary:
+//   .layout        – flex row: left panel + right tree
+//   .master-panel  – sticky left column (blue gradient card)
+//   .tree          – right scrollable column with a vertical green backbone line
+//   .section       – one row of the tree (master clients, or one slave + clients)
+//   .section-row   – horizontal branch from backbone to the label/slave-card
+//   .clients       – stacked list of client rows within a section
+//   .client-row    – single device row (line + label + icon + name + IP)
 
 const STYLES = `
-/* ── Variables ── */
+/* ── CSS custom properties (theme integration) ── */
 :host {
   display: block;
+  /* Green for connection lines; we avoid using HA theme green to guarantee
+     visibility on both light and dark themes. */
   --green:      #4caf50;
   --green-fade: rgba(76,175,80,.18);
+  /* Blue for active device names and slave icon colour (LAN-connected). */
   --blue-dark:  #1565c0;
   --blue:       #1976d2;
+  /* Pull text and background colours from the active HA theme. */
   --text-dim:   var(--secondary-text-color, #888);
   --card-bg:    var(--card-background-color, #fff);
   --divider:    var(--divider-color, #e0e0e0);
   --sec-bg:     var(--secondary-background-color, #f5f5f5);
 }
+/* Clip the card so nothing overflows the rounded corners. */
 ha-card { overflow: hidden; }
 
-/* ── Header ── */
+/* ── Card header ── */
 .card-header {
   padding: 14px 16px 10px;
   font-size: 1.05em;
@@ -302,20 +615,23 @@ ha-card { overflow: hidden; }
   color: var(--primary-text-color);
   border-bottom: 1px solid var(--divider);
 }
+/* overflow-x: auto allows horizontal scrolling when the tree is wider than
+   the dashboard column.  This is important on mobile screens. */
 .card-body { padding: 12px 14px 16px; overflow-x: auto; }
 
 /* ── Two-column layout ── */
 .layout {
   display: flex;
   gap: 16px;
-  align-items: flex-start;
-  min-width: 380px;
+  align-items: flex-start; /* both columns start at the top */
+  min-width: 380px;         /* prevent the layout from collapsing too narrow */
 }
 
-/* ── LEFT: master panel ── */
+/* ── LEFT: master Fritz!Box panel ── */
 .master-panel {
-  flex-shrink: 0;
+  flex-shrink: 0;    /* never shrink; keep a fixed width */
   width: 152px;
+  /* Blue gradient matching AVM's brand colours */
   background: linear-gradient(155deg, #1565c0 0%, #1e88e5 100%);
   color: #fff;
   border-radius: 12px;
@@ -326,6 +642,7 @@ ha-card { overflow: hidden; }
   align-items: center;
   text-align: center;
   gap: 3px;
+  /* Sticky: the master panel stays in view as the user scrolls the tree. */
   position: sticky;
   top: 0;
   align-self: flex-start;
@@ -336,9 +653,10 @@ ha-card { overflow: hidden; }
 .mp-model { font-size: .72em; opacity: .82; margin-top: 1px; }
 .mp-ip    { font-size: .72em; font-family: monospace; opacity: .9; }
 .mp-fw    { font-size: .66em; opacity: .65; }
+/* "HEIMNETZ" badge (German for "home network") – AVM branding convention. */
 .mp-badge {
   margin-top: 8px;
-  background: rgba(255,255,255,.22);
+  background: rgba(255,255,255,.22);  /* semi-transparent white pill */
   border-radius: 4px;
   padding: 2px 10px;
   font-size: .66em;
@@ -346,26 +664,27 @@ ha-card { overflow: hidden; }
   letter-spacing: .1em;
 }
 
-/* ── RIGHT: tree ── */
+/* ── RIGHT: tree column ── */
 .tree {
-  flex: 1;
-  min-width: 0;
-  /* Vertical backbone */
+  flex: 1;         /* take up remaining horizontal space */
+  min-width: 0;    /* allow shrinking below content width (prevents overflow) */
+  /* The vertical green line that forms the tree backbone.
+     Each section branches off this line with a ::before pseudo-element. */
   border-left: 2px solid var(--green);
   margin-left: 4px;
 }
 
-/* ── Section (one per slave / master clients) ── */
+/* ── Section: one entry in the tree (master clients or one slave + clients) ── */
 .section {
-  padding: 10px 0 6px 22px;
+  padding: 10px 0 6px 22px;  /* left padding creates space for the branch lines */
   position: relative;
 }
-/* Last section: shorten backbone so it doesn't overshoot */
+/* Last section: reduce bottom padding so the backbone line doesn't overshoot. */
 .section:last-child {
   padding-bottom: 2px;
 }
 
-/* ── Section row: the horizontal "branch" from backbone ── */
+/* ── Section row: the horizontal branch from backbone to label / slave card ── */
 .section-row {
   display: flex;
   align-items: center;
@@ -374,14 +693,17 @@ ha-card { overflow: hidden; }
   margin-bottom: 6px;
 }
 /*
- * KEY FIX: ::before is placed on .section-row (not .section),
- * so top:50% + translateY(-50%) perfectly centres the branch line
- * with whatever content height the row has (slave card or label).
+ * The ::before pseudo-element draws the short horizontal stub that connects
+ * the vertical backbone to the label or slave card.  It is placed on
+ * .section-row (rather than .section) so that top:50% + translateY(-50%)
+ * perfectly centres the line with the row content, regardless of the row's
+ * height (which varies between the simple "Clients" label and the taller
+ * slave card).
  */
 .section-row::before {
   content: "";
   position: absolute;
-  left: -22px;
+  left: -22px;        /* aligns with the padding-left on .section */
   top: 50%;
   transform: translateY(-50%);
   width: 22px;
@@ -389,20 +711,23 @@ ha-card { overflow: hidden; }
   background: var(--green);
 }
 
-/* ── Horizontal extension line (backbone→label) ── */
+/* ── Horizontal extension line (backbone → label in slave sections) ── */
+/* Extends the visual connection between the backbone and the LAN/WiFi badge. */
 .h-line {
   height: 2px;
   width: 22px;
   flex-shrink: 0;
 }
+/* Solid line for LAN connections. */
 .h-line.lan  { background: var(--green); }
+/* Dashed line for WiFi connections (repeating gradient trick). */
 .h-line.wifi {
   background-image: repeating-linear-gradient(
     to right, var(--green) 0, var(--green) 5px,
     transparent 5px, transparent 10px);
 }
 
-/* ── Row label (LAN / WiFi / Clients) ── */
+/* ── Row label (e.g. "LAN", "WiFi", "Clients") ── */
 .row-label {
   font-size: .68em;
   font-weight: 600;
@@ -414,10 +739,11 @@ ha-card { overflow: hidden; }
   color: var(--green);
   background: var(--green-fade);
 }
+/* WiFi label uses a slightly lighter green to visually distinguish from LAN. */
 .wifi-label { color: #66bb6a; border-color: rgba(102,187,106,.3); background: rgba(102,187,106,.1); }
 .lan-label  { color: var(--green); }
 
-/* ── Slave node card ── */
+/* ── Slave repeater card ── */
 .slave-card {
   display: flex;
   align-items: center;
@@ -428,16 +754,19 @@ ha-card { overflow: hidden; }
   border: 1px solid var(--divider);
   flex-shrink: 0;
   min-width: 120px;
-  max-width: 220px;
+  max-width: 220px;   /* prevent very long names from breaking the layout */
 }
+/* Unassigned section card gets a dashed border and reduced opacity. */
 .unassigned { opacity: .65; border-style: dashed; }
 
 .sc-icon      { width: 26px; height: 26px; flex-shrink: 0; }
 .sc-icon svg  { width: 100%; height: 100%; }
+/* LAN-connected slave → blue icon to match the master panel colour. */
 .sc-lan       { color: var(--blue); }
+/* WiFi-connected slave → green icon to match the WiFi line colour. */
 .sc-wifi      { color: #43a047; }
 
-.sc-info  { min-width: 0; }
+.sc-info  { min-width: 0; }  /* allow text to shrink and truncate */
 .sc-name  { font-weight: 700; font-size: .88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-model { font-size: .7em; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .sc-badge {
@@ -452,14 +781,15 @@ ha-card { overflow: hidden; }
   border-radius: 3px;
 }
 
-/* ── Client list ── */
+/* ── Client list within a section ── */
 .clients {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding-left: 10px;
+  gap: 1px;           /* tight spacing for dense lists */
+  padding-left: 10px; /* indent relative to the section backbone */
 }
 
+/* ── Individual client row ── */
 .client-row {
   display: flex;
   align-items: center;
@@ -467,9 +797,10 @@ ha-card { overflow: hidden; }
   min-height: 26px;
   padding: 2px 0;
 }
+/* Disconnected devices fade out to distinguish them from active ones. */
 .client-row.off { opacity: .38; }
 
-/* Connection dash/solid line */
+/* Short horizontal line connecting the client to its section's backbone. */
 .cl-line       { flex-shrink: 0; width: 48px; height: 2px; }
 .cl-line.lan   { background: var(--green); }
 .cl-line.wifi  {
@@ -478,38 +809,46 @@ ha-card { overflow: hidden; }
     transparent 5px, transparent 10px);
 }
 
-/* Speed / band label */
+/* Speed / band label (e.g. "5 GHz → 867 Mbit/s"). */
 .cl-label {
   font-size: .7em;
   color: var(--text-dim);
-  min-width: 118px;
+  min-width: 118px;   /* fixed width keeps device names left-aligned */
   flex-shrink: 0;
   white-space: nowrap;
 }
 
-/* Connection type icon */
+/* Small WiFi / LAN icon next to the speed label. */
 .cl-icon      { width: 15px; height: 15px; flex-shrink: 0; color: var(--text-dim); }
 .cl-icon svg  { width: 100%; height: 100%; }
 
-/* Device name */
+/* Device hostname: blue + bold when connected, plain when disconnected. */
 .cl-name { font-size: .84em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .client-row:not(.off) .cl-name { color: var(--blue); font-weight: 500; }
 
-/* IP address */
+/* IP address in monospace (only shown when known). */
 .cl-ip { font-size: .68em; font-family: monospace; color: var(--text-dim); white-space: nowrap; margin-left: 2px; flex-shrink: 0; }
 
+/* Placeholder shown when a mesh node has no clients. */
 .no-clients { font-size: .8em; color: var(--text-dim); font-style: italic; padding: 4px 0; }
 
-/* Status / error messages */
+/* ── Status / error messages ── */
 .msg       { display: flex; align-items: center; gap: 10px; padding: 16px 0; font-size: .9em; color: var(--text-dim); }
-.msg.warn  { color: var(--warning-color, #e6a817); }
+.msg.warn  { color: var(--warning-color, #e6a817); }  /* orange for unavailable state */
 .msg svg   { width: 24px; height: 24px; flex-shrink: 0; }
 `;
 
-// ── Registration ───────────────────────────────────────────────────────────────
+// ── Registration ──────────────────────────────────────────────────────────────
+//
+// customElements.define() registers FritzMeshCard as the implementation for
+// the "fritzmesh-card" custom element tag.  The guard prevents an error if
+// the script is somehow loaded twice (e.g. after a hot-reload).
 
 if (!customElements.get("fritzmesh-card")) {
   customElements.define("fritzmesh-card", FritzMeshCard);
+
+  // Log a styled banner to the browser console so users can confirm the
+  // card version at a glance when troubleshooting.
   console.info(
     `%c FRITZMESH-CARD %c v${CARD_VERSION} `,
     "color:#fff;background:#1565c0;font-weight:700;padding:2px 4px;border-radius:3px 0 0 3px",
@@ -517,10 +856,13 @@ if (!customElements.get("fritzmesh-card")) {
   );
 }
 
+// Register the card in HA's custom-cards registry so it appears in the
+// dashboard card picker UI with a name and description.
+// The ??= operator only assigns if window.customCards is null/undefined.
 window.customCards ??= [];
 window.customCards.push({
   type:        "fritzmesh-card",
   name:        "Fritz!Box Mesh Topology",
   description: "Visualises which devices are connected to which mesh node.",
-  preview:     false,
+  preview:     false,  // set true to show a live preview in the card picker
 });

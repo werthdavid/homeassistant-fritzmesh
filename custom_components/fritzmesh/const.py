@@ -1,13 +1,32 @@
+# ---------------------------------------------------------------------------
+# const.py – Shared constants for the Fritz!Box Mesh integration
+#
+# All string keys and default values live here so that a single change
+# propagates everywhere: config_flow, coordinator, sensors, etc.
+# ---------------------------------------------------------------------------
+
+# The integration's unique identifier.  Must match the `domain` field in
+# manifest.json and the folder name under custom_components/.
 DOMAIN = "fritzmesh"
 
-CONF_HOST = "host"
-CONF_PORT = "port"
-CONF_USERNAME = "username"
-CONF_PASSWORD = "password"
-CONF_USE_TLS = "use_tls"
-CONF_POLL_INTERVAL = "poll_interval"
+# ── Config-entry data keys ──────────────────────────────────────────────────
+# These strings are used as keys when reading/writing the ConfigEntry `data`
+# dict.  They also match the field names in the config-flow schema so that
+# `user_input` can be passed directly to the entry without remapping.
 
-DEFAULT_HOST = "192.168.178.1"
-DEFAULT_PORT = 49000
-DEFAULT_USE_TLS = False
-DEFAULT_POLL_INTERVAL = 60
+CONF_HOST     = "host"          # Fritz!Box hostname or IP address
+CONF_PORT     = "port"          # TR-064 service port (HTTP: 49000, HTTPS: 49443)
+CONF_USERNAME = "username"      # Fritz!Box web-UI username (may be empty)
+CONF_PASSWORD = "password"      # Fritz!Box web-UI password
+CONF_USE_TLS  = "use_tls"       # Whether to use HTTPS for the TR-064 connection
+CONF_POLL_INTERVAL = "poll_interval"  # How often (seconds) to refresh topology
+
+# ── Defaults ────────────────────────────────────────────────────────────────
+# Sensible defaults shown in the config-flow form.  192.168.178.1 is the
+# factory default IP of every AVM Fritz!Box sold in German-speaking markets.
+# Port 49000 is the standard TR-064 HTTP port; TLS would use 49443.
+
+DEFAULT_HOST          = "192.168.178.1"
+DEFAULT_PORT          = 49000   # Plain HTTP TR-064 port
+DEFAULT_USE_TLS       = False   # Most home setups don't enable TLS on TR-064
+DEFAULT_POLL_INTERVAL = 60      # Refresh every 60 seconds (1 minute)

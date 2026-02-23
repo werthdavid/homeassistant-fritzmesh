@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "documentation": "https://github.com/werthdavid/homeassistant-fritzmesh",
   "requirements": ["fritzconnection>=1.13.0"],
-  "dependencies": [],
+  "dependencies": ["http"],
   "codeowners": [],
   "iot_class": "local_polling",
   "config_flow": true,

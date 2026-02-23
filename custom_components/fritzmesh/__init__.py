@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -39,6 +40,11 @@ from .const import (
 from .coordinator import FritzMeshCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# Required by HACS/hassfest: integrations with async_setup must declare a
+# CONFIG_SCHEMA. Since this integration is configured only via config entries,
+# we use the helper that enforces exactly that.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # Platforms that this integration provides entities for.
 # Each string must match a Python module of the same name in this package.

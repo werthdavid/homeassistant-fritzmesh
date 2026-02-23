@@ -241,7 +241,7 @@ class FritzMeshCard extends HTMLElement {
    * @returns {Object} Default card configuration.
    */
   static getStubConfig() {
-    return { entity: "sensor.fritzmesh_topology" };
+    return { entity: "sensor.fritz_box_mesh_192_168_178_1_topology" };
   }
 
   /**
@@ -256,6 +256,14 @@ class FritzMeshCard extends HTMLElement {
    * @param {string} [config.title] - Optional card header text.
    * @throws {Error} If `entity` is missing from the configuration.
    */
+  connectedCallback() {
+    // Ensure the shadow DOM is never empty while the card waits for the
+    // first hass update.  An empty shadow root can confuse HA's card loader.
+    if (!this.shadowRoot.innerHTML) {
+      this.shadowRoot.innerHTML = `<style>${STYLES}</style><ha-card></ha-card>`;
+    }
+  }
+
   setConfig(config) {
     if (!config.entity)
       throw new Error("fritzmesh-card: set `entity` to your topology sensor.");
@@ -286,7 +294,16 @@ class FritzMeshCard extends HTMLElement {
     if (key === this._lastKey) return;
 
     this._lastKey = key;
-    this._render(state);
+    try {
+      this._render(state);
+    } catch (e) {
+      console.error("fritzmesh-card render error:", e);
+      this._setHTML("Fritz!Box Mesh Topology", `
+        <div class="msg warn">
+          ${ICON.unknown}
+          <span>Render error: <code>${esc(String(e))}</code></span>
+        </div>`);
+    }
   }
 
   /**

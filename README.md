@@ -32,7 +32,7 @@ I have no business relationship with AVM, and this software is provided for info
 ### Via HACS (recommended)
 
 1. Open HACS → **Integrations** → ⋮ → **Custom repositories**
-2. Add `https://github.com/werthdavid/homeassistant-FRITZmesh` as type **Integration**
+2. Add `https://github.com/werthdavid/homeassistant-fritzmesh` as type **Integration**
 3. Install **FRITZ! Mesh**
 4. Restart Home Assistant
 

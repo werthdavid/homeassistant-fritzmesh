@@ -35,7 +35,12 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
+
+// Top-level guard: runs the instant the script is parsed, before any class
+// or constant definition. Visible in console at "Info" level.
+console.info("[fritzmesh-card] script executing, version", CARD_VERSION,
+  "| already defined:", !!customElements.get("fritzmesh-card"));
 
 // ── Inline SVG icons ──────────────────────────────────────────────────────────
 //
@@ -245,6 +250,17 @@ class FritzMeshCard extends HTMLElement {
   }
 
   /**
+   * Return the custom element used as the visual UI editor for this card.
+   * HA calls this method when the user switches to the "Visual Editor" tab in
+   * the card configuration dialog.
+   *
+   * @returns {HTMLElement} An instance of FritzMeshCardEditor.
+   */
+  static getConfigElement() {
+    return document.createElement("fritzmesh-card-editor");
+  }
+
+  /**
    * Accept the card configuration from the YAML/UI editor.
    *
    * Called by HA once when the card is first created (or when the user edits
@@ -265,8 +281,15 @@ class FritzMeshCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.entity)
-      throw new Error("fritzmesh-card: set `entity` to your topology sensor.");
+    // Log at `info` level so it always appears in the browser console
+    // (unlike `debug` which requires enabling "Verbose" in DevTools).
+
+    if (!config?.entity) {
+      const msg = `fritzmesh-card: \`entity\` is missing or empty. ` +
+        `Received config: ${JSON.stringify(config)}`;
+      console.error(msg);
+      throw new Error(msg);
+    }
     this._config = config;
   }
 
@@ -589,6 +612,110 @@ class FritzMeshCard extends HTMLElement {
   }
 }
 
+// ── Visual editor ─────────────────────────────────────────────────────────────
+//
+// FritzMeshCardEditor is the UI editor element rendered inside the card
+// configuration dialog when the user picks the "Visual Editor" tab.
+//
+// HA protocol:
+//   • HA calls FritzMeshCard.getConfigElement() to obtain this element.
+//   • It then calls setConfig(config) with the current card YAML.
+//   • It sets the `hass` property so the entity picker can query entity IDs.
+//   • Whenever the user changes a field, the editor must fire a
+//     "config-changed" CustomEvent with { detail: { config } } so HA can
+//     update the YAML pane and the live preview.
+
+class FritzMeshCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+    this._hass   = null;
+  }
+
+  /** Receive the current card config – re-renders the form. */
+  setConfig(config) {
+    this._config = { ...config };
+    this._render();
+  }
+
+  /** Receive the HA instance – forwarded to ha-entity-picker. */
+  set hass(hass) {
+    this._hass = hass;
+    const picker = this.shadowRoot.querySelector("ha-entity-picker");
+    if (picker) picker.hass = hass;
+  }
+
+  _render() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        .card-config {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          padding: 16px 0;
+        }
+        ha-entity-picker,
+        ha-textfield {
+          display: block;
+          width: 100%;
+        }
+      </style>
+      <div class="card-config">
+        <ha-entity-picker
+          label="Topology sensor entity (required)"
+          allow-custom-entity
+        ></ha-entity-picker>
+        <ha-textfield
+          label="Card title (optional)"
+          placeholder="Fritz!Box Mesh Topology"
+          helper="Leave blank to use the default title; set to a space to hide the header."
+        ></ha-textfield>
+      </div>`;
+
+    // Properties that must be set programmatically (not via HTML attributes).
+    const picker = this.shadowRoot.querySelector("ha-entity-picker");
+    if (picker) {
+      picker.hass           = this._hass;
+      picker.value          = this._config.entity ?? "";
+      picker.includeDomains = ["sensor"];
+      picker.addEventListener("value-changed", (e) => {
+        const val = e.detail.value;
+        if (val === this._config.entity) return;
+        this._dispatch({ ...this._config, entity: val });
+      });
+    }
+
+    const titleEl = this.shadowRoot.querySelector("ha-textfield");
+    if (titleEl) {
+      // Treat config.title=undefined as "" in the field; config.title=""
+      // (empty string) is a valid value meaning "hide the header".
+      titleEl.value = this._config.title ?? "";
+      titleEl.addEventListener("change", (e) => {
+        const cfg = { ...this._config };
+        const val = e.target.value;
+        // Keep title key only when explicitly set by user.
+        if (val !== "") {
+          cfg.title = val;
+        } else {
+          delete cfg.title;
+        }
+        this._dispatch(cfg);
+      });
+    }
+  }
+
+  /** Fire the config-changed event that HA listens for. */
+  _dispatch(config) {
+    this._config = config;
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail:   { config },
+      bubbles:  true,
+      composed: true,
+    }));
+  }
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 //
 // All CSS is scoped to the shadow DOM, so it cannot leak into the surrounding
@@ -863,6 +990,34 @@ ha-card { overflow: hidden; }
 
 if (!customElements.get("fritzmesh-card")) {
   customElements.define("fritzmesh-card", FritzMeshCard);
+  customElements.define("fritzmesh-card-editor", FritzMeshCardEditor);
+
+  // On a cold (uncached) load HA renders the dashboard before this script
+  // finishes downloading.  It finds "fritzmesh-card" undefined, shows
+  // "Configuration error", and does not retry on its own.
+  //
+  // Fix: dispatch `ll-rebuild` directly on `hui-root`, the Lovelace shadow
+  // component that owns the handler.  Dispatching on `window` does NOT work
+  // because events cannot travel downward through shadow DOM boundaries.
+  //
+  // We retry until hui-root is found (it may not be mounted yet if this
+  // script loads very quickly, before Lovelace has initialised).
+  (function _rebuildLovelace(retriesLeft) {
+    const huiRoot = document
+      .querySelector("home-assistant")
+      ?.shadowRoot?.querySelector("home-assistant-main")
+      ?.shadowRoot?.querySelector("ha-panel-lovelace")
+      ?.shadowRoot?.querySelector("hui-root");
+
+    if (huiRoot) {
+      console.info("[fritzmesh-card] dispatching ll-rebuild → hui-root");
+      huiRoot.dispatchEvent(new Event("ll-rebuild"));
+    } else if (retriesLeft > 0) {
+      setTimeout(() => _rebuildLovelace(retriesLeft - 1), 250);
+    } else {
+      console.warn("[fritzmesh-card] hui-root not found after retries");
+    }
+  })(20); // up to 20 × 250 ms = 5 s of retries
 
   // Log a styled banner to the browser console so users can confirm the
   // card version at a glance when troubleshooting.

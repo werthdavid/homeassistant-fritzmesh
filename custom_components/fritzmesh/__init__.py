@@ -24,8 +24,12 @@ import logging
 from pathlib import Path
 
 import homeassistant.helpers.config_validation as cv
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.lovelace import MODE_STORAGE, LovelaceData
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_call_later
 
 from .const import (
     DOMAIN,
@@ -41,85 +45,150 @@ from .coordinator import FritzMeshCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Required by HACS/hassfest: integrations with async_setup must declare a
-# CONFIG_SCHEMA. Since this integration is configured only via config entries,
-# we use the helper that enforces exactly that.
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-
-# Platforms that this integration provides entities for.
-# Each string must match a Python module of the same name in this package.
 PLATFORMS = ["sensor", "binary_sensor"]
 
-# URL at which the Lovelace card JavaScript will be served by the HA HTTP
-# server.  Must be unique across all installed custom cards.
 _CARD_URL = "/fritzmesh/fritzmesh-card.js"
-
-# Absolute path to the bundled JS file that ships with this integration.
-# Path(__file__) resolves to this __init__.py, so .parent is the package
-# folder, and "www/" is the subfolder that HA conventionally uses for
-# front-end resources.
 _CARD_FILE = Path(__file__).parent / "www" / "fritzmesh-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register the Lovelace card as a static resource (runs once at startup).
+    """Serve the Lovelace card JS and register it as a module resource.
 
-    Home Assistant calls this function exactly once for the entire domain,
-    regardless of how many config entries exist.  We use it only to serve
-    the front-end card JS file; the real work happens in async_setup_entry.
+    Why we defer resource registration
+    ────────────────────────────────────
+    add_extra_js_url() injects a plain <script> tag into HA's HTML head.
+    Lovelace knows nothing about it, so it never calls
+    customElements.whenDefined() before trying to render cards — causing a
+    "Configuration error" on every cold (uncached) page load.
 
-    By registering the JS via add_extra_js_url() we inject it into every
-    Lovelace dashboard automatically, which means users don't need to add
-    the resource manually in the dashboard settings.
+    The Lovelace Resources API (Settings → Dashboards → Resources) does
+    trigger whenDefined(), but hass.data["lovelace"]["resources"] is only
+    populated after lovelace's own async_setup completes.  We therefore
+    schedule registration for EVENT_HOMEASSISTANT_STARTED, by which time
+    all core components including lovelace are ready.
 
-    Falls back gracefully (with a warning) if the new StaticPathConfig API
-    isn't available in older HA versions.
+    On the very first HA start the resource entry is created in storage.
+    Every subsequent start it already exists, so the duplicate guard is a
+    no-op and no extra write is performed.
     """
-    if _CARD_FILE.exists():
-        try:
-            # StaticPathConfig was introduced in HA 2024.x.  We import it
-            # here (not at module level) so that the integration can still
-            # load on slightly older versions — the except block handles it.
-            from homeassistant.components.http import StaticPathConfig
-            from homeassistant.components.frontend import add_extra_js_url
+    if not _CARD_FILE.exists():
+        _LOGGER.warning("fritzmesh-card.js not found at %s", _CARD_FILE)
+        return True
 
-            # Register the local file to be served at _CARD_URL.
-            # cache_headers=False means the browser will always re-check
-            # for updates instead of caching the file indefinitely.
-            await hass.http.async_register_static_paths(
-                [StaticPathConfig(_CARD_URL, str(_CARD_FILE), cache_headers=False)]
-            )
+    # Step 1: serve the file over HTTP (needed regardless of registration method).
+    try:
+        from homeassistant.components.http import StaticPathConfig
 
-            # Tell the Lovelace front-end to load this JS on every page load.
-            add_extra_js_url(hass, _CARD_URL)
-            _LOGGER.debug("Registered fritzmesh-card at %s", _CARD_URL)
-        except Exception:
-            # Non-fatal: the card simply won't auto-load.  The user can add
-            # the resource manually via Settings → Dashboards → Resources.
-            _LOGGER.warning(
-                "Could not auto-register fritzmesh-card. "
-                "Add '%s' manually as a Lovelace resource.",
-                _CARD_URL,
-            )
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(_CARD_URL, str(_CARD_FILE), cache_headers=False)]
+        )
+    except Exception as exc:
+        _LOGGER.warning(
+            "Could not register static path for fritzmesh-card (%s). "
+            "Add '%s' manually as a Lovelace resource.",
+            exc, _CARD_URL,
+        )
+        return True
+
+    # Step 2: register as a Lovelace module resource once HA has started.
+    async def _register_resource(_event=None) -> None:
+        await _async_register_lovelace_resource_when_ready(hass, _CARD_URL)
+
+    if hass.is_running:
+        # Integration was loaded after HA started (e.g. via developer tools).
+        hass.async_create_task(_register_resource())
+    else:
+        # Normal startup path: lovelace is not ready yet; wait for it.
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_resource)
+
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Fritz!Box Mesh from a config entry.
+async def _async_register_lovelace_resource(hass: HomeAssistant, url: str) -> bool:
+    """Add *url* as a Lovelace module resource if it is not already present.
 
-    This function runs once for each Fritz!Box the user has configured.
-
-    Steps:
-      1. Instantiate FritzMeshCoordinator with the stored credentials.
-      2. Trigger the first data refresh (blocking until data is available or
-         an exception is raised — HA will retry the entry on failure).
-      3. Store the coordinator in hass.data so that platform modules can
-         retrieve it by entry_id.
-      4. Forward setup to every platform so their entities are created.
+    Returns True when the resource is (now) registered via the Lovelace
+    storage API, False when the collection is unavailable (YAML mode) or an
+    unexpected error occurs.
     """
-    # Build the coordinator that will periodically poll the Fritz!Box.
-    # All connection parameters come from the config entry that was created
-    # by config_flow.py when the user completed the setup wizard.
+    try:
+        lovelace: LovelaceData | None = hass.data.get("lovelace")
+        resources = lovelace.resources if lovelace else None
+
+        if lovelace is None or resources is None:
+            _LOGGER.debug(
+                "Lovelace resource collection not available "
+                "(YAML mode or lovelace not yet loaded)"
+            )
+            return False
+
+        # Guard against duplicate entries accumulating across HA restarts.
+        for item in resources.async_items():
+            if _strip_query(item.get("url", "")) == url:
+                _LOGGER.debug("fritzmesh-card already in Lovelace resources, skipping")
+                return True
+
+        await resources.async_create_item({"res_type": "module", "url": url})
+        return True
+
+    except Exception as exc:
+        _LOGGER.debug("Could not register Lovelace resource: %s", exc)
+        return False
+
+
+async def _async_register_lovelace_resource_when_ready(
+    hass: HomeAssistant, url: str
+) -> None:
+    """Register Lovelace resource after resource storage has loaded.
+
+    In storage mode, Lovelace resources can still be loading when HA has
+    already reached EVENT_HOMEASSISTANT_STARTED, so retry until loaded.
+    """
+    lovelace: LovelaceData | None = hass.data.get("lovelace")
+    if lovelace is None:
+        add_extra_js_url(hass, url)
+        _LOGGER.info(
+            "fritzmesh-card: Lovelace not available. "
+            "Add '%s' as a module resource for reliable loading.",
+            url,
+        )
+        return
+
+    resource_mode = getattr(lovelace, "resource_mode", getattr(lovelace, "mode", None))
+    if resource_mode != MODE_STORAGE:
+        # Lovelace is in YAML mode (resource collection is read-only).
+        add_extra_js_url(hass, url)
+        _LOGGER.info(
+            "fritzmesh-card: Lovelace is in YAML mode. "
+            "Add '%s' as a module resource for reliable loading.",
+            url,
+        )
+        return
+
+    async def _check_resources_loaded(_now) -> None:
+        resources = lovelace.resources
+        if resources and getattr(resources, "loaded", True):
+            if await _async_register_lovelace_resource(hass, url):
+                _LOGGER.debug(
+                    "fritzmesh-card registered as Lovelace module resource at %s",
+                    url,
+                )
+            return
+
+        _LOGGER.debug("Lovelace resources not loaded yet, retrying in 5 seconds")
+        async_call_later(hass, 5, _check_resources_loaded)
+
+    await _check_resources_loaded(0)
+
+
+def _strip_query(url: str) -> str:
+    """Return URL path without query params."""
+    return url.split("?", 1)[0]
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Fritz!Box Mesh from a config entry."""
     coordinator = FritzMeshCoordinator(
         hass=hass,
         host=entry.data[CONF_HOST],
@@ -130,34 +199,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         poll_interval=entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
     )
 
-    # Perform the very first fetch synchronously (from HA's perspective).
-    # If this raises, HA will mark the entry as failed and retry later.
     await coordinator.async_config_entry_first_refresh()
-
-    # Store the coordinator keyed by entry_id so each platform module can
-    # look it up with:  hass.data[DOMAIN][entry.entry_id]
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-
-    # Delegate entity creation to sensor.py and binary_sensor.py.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry.
-
-    Called when the user removes the integration or when HA shuts down.
-    We let each platform unregister its entities first, then clean up
-    the coordinator from hass.data.
-    """
-    # Ask every platform to unload its entities.  Returns True only if all
-    # platforms unloaded without error.
+    """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-
     if unload_ok:
-        # Remove the coordinator from the shared data store so it can be
-        # garbage-collected.
         hass.data[DOMAIN].pop(entry.entry_id)
-
     return unload_ok

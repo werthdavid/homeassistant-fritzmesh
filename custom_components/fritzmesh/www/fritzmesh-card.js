@@ -35,7 +35,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.2.2";
+const CARD_VERSION = "1.3.1";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -237,6 +237,8 @@ class FritzMeshCard extends HTMLElement {
     // We compare it on every `set hass()` call to skip re-renders when
     // nothing has changed, avoiding unnecessary DOM updates.
     this._lastKey = "";
+    this._sizeMode = "";
+    this._resizeObserver = null;
   }
 
   /**
@@ -277,6 +279,15 @@ class FritzMeshCard extends HTMLElement {
     // first hass update.  An empty shadow root can confuse HA's card loader.
     if (!this.shadowRoot.innerHTML) {
       this.shadowRoot.innerHTML = `<style>${STYLES}</style><ha-card></ha-card>`;
+    }
+    this._ensureResizeObserver();
+    this._updateSizeMode(this.clientWidth);
+  }
+
+  disconnectedCallback() {
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
     }
   }
 
@@ -347,6 +358,21 @@ class FritzMeshCard extends HTMLElement {
     const nodes   = this._lastKey ? (JSON.parse(this._lastKey)?.mesh_nodes ?? []) : [];
     const clients = nodes.reduce((s, n) => s + (n.clients?.length ?? 0), 0);
     return Math.max(4, Math.ceil((nodes.length * 3 + clients) / 4));
+  }
+
+  /**
+   * Default grid behavior for dashboard Sections view.
+   * Users can still override this with per-card `grid_options` in UI/YAML.
+   */
+  getGridOptions() {
+    return {
+      columns: 9,
+      rows: 3,
+      min_columns: 4,
+      max_columns: 12,
+      min_rows: 2,
+      max_rows: 8,
+    };
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -609,6 +635,23 @@ class FritzMeshCard extends HTMLElement {
         ${title ? `<div class="card-header">${esc(title)}</div>` : ""}
         <div class="card-body">${body}</div>
       </ha-card>`;
+    this._updateSizeMode(this.clientWidth);
+  }
+
+  _ensureResizeObserver() {
+    if (this._resizeObserver) return;
+    this._resizeObserver = new ResizeObserver((entries) => {
+      const width = entries?.[0]?.contentRect?.width ?? this.clientWidth;
+      this._updateSizeMode(width);
+    });
+    this._resizeObserver.observe(this);
+  }
+
+  _updateSizeMode(width) {
+    const mode = width < 520 ? "compact" : width < 760 ? "medium" : "full";
+    if (mode === this._sizeMode) return;
+    this._sizeMode = mode;
+    this.setAttribute("data-size", mode);
   }
 }
 
@@ -803,6 +846,8 @@ const STYLES = `
 /* ── CSS custom properties (theme integration) ── */
 :host {
   display: block;
+  height: 100%;
+  min-height: 0;
   /* Green for connection lines; we avoid using HA theme green to guarantee
      visibility on both light and dark themes. */
   --green:      #4caf50;
@@ -816,8 +861,14 @@ const STYLES = `
   --divider:    var(--divider-color, #e0e0e0);
   --sec-bg:     var(--secondary-background-color, #f5f5f5);
 }
-/* Clip the card so nothing overflows the rounded corners. */
-ha-card { overflow: hidden; }
+/* Clip and stretch card body for grid-constrained layouts. */
+ha-card {
+  overflow: hidden;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 /* ── Card header ── */
 .card-header {
@@ -827,16 +878,22 @@ ha-card { overflow: hidden; }
   color: var(--primary-text-color);
   border-bottom: 1px solid var(--divider);
 }
-/* overflow-x: auto allows horizontal scrolling when the tree is wider than
-   the dashboard column.  This is important on mobile screens. */
-.card-body { padding: 12px 14px 16px; overflow-x: auto; }
+/* Scroll both directions when card is constrained by grid rows/columns. */
+.card-body {
+  padding: 12px 14px 16px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+}
 
 /* ── Two-column layout ── */
 .layout {
   display: flex;
   gap: 16px;
   align-items: flex-start; /* both columns start at the top */
-  min-width: 380px;         /* prevent the layout from collapsing too narrow */
+  min-width: 0;
+  min-height: 0;
 }
 
 /* ── LEFT: master Fritz!Box panel ── */
@@ -880,10 +937,55 @@ ha-card { overflow: hidden; }
 .tree {
   flex: 1;         /* take up remaining horizontal space */
   min-width: 0;    /* allow shrinking below content width (prevents overflow) */
+  min-height: 0;
   /* The vertical green line that forms the tree backbone.
      Each section branches off this line with a ::before pseudo-element. */
   border-left: 2px solid var(--green);
   margin-left: 4px;
+}
+
+/* Medium cards: slightly tighter spacing and narrower master panel. */
+:host([data-size="medium"]) .layout { gap: 12px; }
+:host([data-size="medium"]) .master-panel { width: 132px; padding: 12px 10px; position: static; }
+:host([data-size="medium"]) .mp-icon { width: 44px; height: 44px; }
+:host([data-size="medium"]) .cl-label { min-width: 96px; }
+:host([data-size="medium"]) .cl-line { width: 34px; }
+
+/* Compact cards: stack master panel above tree for narrow columns. */
+:host([data-size="compact"]) .layout {
+  flex-direction: column;
+  gap: 10px;
+}
+:host([data-size="compact"]) .master-panel {
+  position: static;
+  width: auto;
+  max-width: none;
+  align-self: stretch;
+  border-radius: 10px;
+}
+:host([data-size="compact"]) .tree {
+  border-left: none;
+  margin-left: 0;
+}
+:host([data-size="compact"]) .section {
+  padding-left: 0;
+}
+:host([data-size="compact"]) .section-row::before {
+  display: none;
+}
+:host([data-size="compact"]) .h-line,
+:host([data-size="compact"]) .cl-line {
+  width: 14px;
+}
+:host([data-size="compact"]) .clients {
+  padding-left: 0;
+}
+:host([data-size="compact"]) .slave-card {
+  min-width: 0;
+  max-width: 100%;
+}
+:host([data-size="compact"]) .cl-label {
+  min-width: 78px;
 }
 
 /* ── Section: one entry in the tree (master clients or one slave + clients) ── */

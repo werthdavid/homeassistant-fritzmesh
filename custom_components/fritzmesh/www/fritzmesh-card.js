@@ -35,7 +35,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.2.0";
+const CARD_VERSION = "1.2.2";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -639,70 +639,111 @@ class FritzMeshCardEditor extends HTMLElement {
     this._render();
   }
 
-  /** Receive the HA instance – forwarded to ha-entity-picker. */
+  /** Receive the HA instance and re-render available entities. */
   set hass(hass) {
     this._hass = hass;
-    const picker = this.shadowRoot.querySelector("ha-entity-picker");
-    if (picker) picker.hass = hass;
+    this._render();
   }
 
   _render() {
+    const entities = this._applicableEntities();
+    const currentEntity = this._config.entity ?? "";
+    const currentTitle = this._config.title ?? "";
+
     this.shadowRoot.innerHTML = `
       <style>
         .card-config {
           display: flex;
           flex-direction: column;
-          gap: 16px;
-          padding: 16px 0;
+          gap: 12px;
+          padding: 12px 0;
         }
-        ha-entity-picker,
-        ha-textfield {
+        label {
           display: block;
+          font-size: 0.86rem;
+          font-weight: 600;
+          margin-bottom: 6px;
+        }
+        select,
+        input {
+          box-sizing: border-box;
           width: 100%;
+          padding: 8px;
+          border-radius: 6px;
+          border: 1px solid var(--divider-color, #d0d0d0);
+          background: var(--card-background-color, #fff);
+          color: var(--primary-text-color, #111);
+          font: inherit;
+        }
+        .hint {
+          margin-top: 4px;
+          font-size: 0.78rem;
+          color: var(--secondary-text-color, #777);
         }
       </style>
       <div class="card-config">
-        <ha-entity-picker
-          label="Topology sensor entity (required)"
-          allow-custom-entity
-        ></ha-entity-picker>
-        <ha-textfield
-          label="Card title (optional)"
-          placeholder="Fritz!Box Mesh Topology"
-          helper="Leave blank to use the default title; set to a space to hide the header."
-        ></ha-textfield>
+        <div>
+          <label for="entity-select">Topology sensor (required)</label>
+          <select id="entity-select">
+            <option value="">Select an entity...</option>
+            ${entities.map((entityId) => `
+              <option value="${esc(entityId)}" ${entityId === currentEntity ? "selected" : ""}>
+                ${esc(entityId)}
+              </option>
+            `).join("")}
+          </select>
+          <div class="hint">Only FritzMesh topology sensors are shown here.</div>
+        </div>
+
+        <div>
+          <label for="entity-input">Or enter entity id manually</label>
+          <input
+            id="entity-input"
+            type="text"
+            placeholder="sensor.fritz_box_mesh_..._topology"
+            value="${esc(currentEntity)}"
+          />
+        </div>
+
+        <div>
+          <label for="title-input">Card title (optional)</label>
+          <input
+            id="title-input"
+            type="text"
+            placeholder="Fritz!Box Mesh Topology"
+            value="${esc(currentTitle)}"
+          />
+          <div class="hint">Leave empty to use default title.</div>
+        </div>
       </div>`;
 
-    // Properties that must be set programmatically (not via HTML attributes).
-    const picker = this.shadowRoot.querySelector("ha-entity-picker");
-    if (picker) {
-      picker.hass           = this._hass;
-      picker.value          = this._config.entity ?? "";
-      picker.includeDomains = ["sensor"];
-      picker.addEventListener("value-changed", (e) => {
-        const val = e.detail.value;
-        if (val === this._config.entity) return;
-        this._dispatch({ ...this._config, entity: val });
-      });
-    }
+    const entitySelect = this.shadowRoot.querySelector("#entity-select");
+    const entityInput = this.shadowRoot.querySelector("#entity-input");
+    const titleInput = this.shadowRoot.querySelector("#title-input");
 
-    const titleEl = this.shadowRoot.querySelector("ha-textfield");
-    if (titleEl) {
-      // Treat config.title=undefined as "" in the field; config.title=""
-      // (empty string) is a valid value meaning "hide the header".
-      titleEl.value = this._config.title ?? "";
-      titleEl.addEventListener("change", (e) => {
-        const cfg = { ...this._config };
-        const val = e.target.value;
-        // Keep title key only when explicitly set by user.
-        if (val !== "") {
-          cfg.title = val;
-        } else {
-          delete cfg.title;
-        }
-        this._dispatch(cfg);
-      });
-    }
+    entitySelect?.addEventListener("change", (e) => {
+      const val = e.target.value;
+      const cfg = { ...this._config };
+      if (val) cfg.entity = val;
+      this._dispatch(cfg);
+      if (entityInput) entityInput.value = val;
+    });
+
+    entityInput?.addEventListener("change", (e) => {
+      const val = e.target.value?.trim();
+      const cfg = { ...this._config };
+      if (val) cfg.entity = val;
+      else delete cfg.entity;
+      this._dispatch(cfg);
+    });
+
+    titleInput?.addEventListener("change", (e) => {
+      const val = e.target.value;
+      const cfg = { ...this._config };
+      if (val !== "") cfg.title = val;
+      else delete cfg.title;
+      this._dispatch(cfg);
+    });
   }
 
   /** Fire the config-changed event that HA listens for. */
@@ -713,6 +754,33 @@ class FritzMeshCardEditor extends HTMLElement {
       bubbles:  true,
       composed: true,
     }));
+  }
+
+  /**
+   * Filter Lovelace entity picker to sensors that look like FritzMesh topology.
+   *
+   * We intentionally allow fallback by entity-id pattern for startup timing:
+   * states can be incomplete while the editor first opens.
+   */
+  _isApplicableEntity(entityId) {
+    if (!entityId || !entityId.startsWith("sensor.")) return false;
+
+    const state = this._hass?.states?.[entityId];
+    const attrs = state?.attributes ?? {};
+
+    // Strong signal: topology payload attributes provided by this integration.
+    if (Array.isArray(attrs.mesh_nodes)) return true;
+    if (Array.isArray(attrs.unassigned_clients)) return true;
+
+    // Fallback signal for early startup or unavailable state object.
+    return entityId.endsWith("_topology");
+  }
+
+  _applicableEntities() {
+    if (!this._hass?.states) return [];
+    return Object.keys(this._hass.states)
+      .filter((entityId) => this._isApplicableEntity(entityId))
+      .sort((a, b) => a.localeCompare(b));
   }
 }
 

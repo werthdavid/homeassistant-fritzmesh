@@ -142,6 +142,7 @@ class MeshNode:
     model: str = ""
     vendor: str = ""
     firmware: str = ""
+    ip: Optional[str] = None
     is_meshed: bool = True
     clients: list = field(default_factory=list)  # list[ClientDevice]
     # Uplink information (only relevant for slave nodes)
@@ -219,6 +220,20 @@ def _find_parent_link(node_uid: str, all_nodes_by_uid: dict) -> tuple[Optional[s
     return None, "", "", ""
 
 
+def _extract_primary_ipv4(ip_addresses: list[dict] | None) -> Optional[str]:
+    """Extract the first IPv4 address (without CIDR suffix) from node ip list."""
+    if not ip_addresses:
+        return None
+    for ip_entry in ip_addresses:
+        if ip_entry.get("version") != "V4":
+            continue
+        value = ip_entry.get("value", "")
+        if not value:
+            continue
+        return value.split("/", 1)[0]
+    return None
+
+
 # ── Main parser ───────────────────────────────────────────────────────────────
 
 def parse_mesh_topology(raw: dict) -> MeshTopology:
@@ -267,6 +282,7 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
             "uid": uid,
             "name": node.get("device_name", uid),
             "mac": node.get("device_mac_address", ""),
+            "ip": _extract_primary_ipv4(node.get("ip_addresses")),
             "model": node.get("device_model", ""),
             "vendor": node.get("device_manufacturer", ""),
             "firmware": node.get("device_firmware_version", ""),
@@ -290,6 +306,7 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
                 uid=uid,
                 name=entry["name"],
                 mac=entry["mac"],
+                ip=entry["ip"],
                 role=entry["mesh_role"],
                 model=entry["model"],
                 vendor=entry["vendor"],

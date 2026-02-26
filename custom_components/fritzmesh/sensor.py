@@ -460,6 +460,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                 {
                     "name":             node.name,
                     "mac":              node.mac,
+                    "ip":               node.ip,
                     "role":             node.role,           # "master" or "slave"
                     "model":            node.model,          # hardware model string
                     "vendor":           node.vendor,

@@ -35,7 +35,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.6.2";
+const CARD_VERSION = "1.7.3";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -329,10 +329,15 @@ class FritzMeshCard extends HTMLElement {
     if (!["mesh_node", "connection_state"].includes(nameInfoDisplay)) {
       throw new Error("fritzmesh-card: name_info_display must be 'mesh_node' or 'connection_state'");
     }
+    const nodeSort = config.node_sort ?? "default";
+    if (!["default", "name", "ip", "mac"].includes(nodeSort)) {
+      throw new Error("fritzmesh-card: node_sort must be 'default', 'name', 'ip', or 'mac'");
+    }
     this._config = {
       ...config,
       url_template: config.url_template ?? "http://{ip}",
       name_info_display: nameInfoDisplay,
+      node_sort: nodeSort,
       line_color: sanitizeHexColor(config.line_color, "#4caf50"),
       accent_color: sanitizeHexColor(config.accent_color, "#1976d2"),
       text_dim_color: sanitizeHexColor(config.text_dim_color, "#888888"),
@@ -468,7 +473,7 @@ class FritzMeshCard extends HTMLElement {
     // The topology sensor always sorts master first, but we find it explicitly
     // for clarity and resilience.
     const master = nodes.find((n) => n.role === "master") ?? nodes[0];
-    const slaves  = nodes.filter((n) => n !== master);
+    const slaves = this._sortSlaveNodes(nodes.filter((n) => n !== master));
 
     // Build the two-column layout:
     //   Left  → sticky master panel (blue gradient card with router icon)
@@ -521,7 +526,7 @@ class FritzMeshCard extends HTMLElement {
    */
   _masterSection(node) {
     // Sort a copy to avoid mutating the original attribute array.
-    const clients = [...(node?.clients ?? [])].sort(clientSort);
+    const clients = this._sortClients([...(node?.clients ?? [])]);
     return `
       <div class="section">
         <div class="section-row">
@@ -550,7 +555,7 @@ class FritzMeshCard extends HTMLElement {
    * @returns {string} HTML string for the slave section.
    */
   _slaveSection(node) {
-    const clients  = [...(node?.clients ?? [])].sort(clientSort);
+    const clients  = this._sortClients([...(node?.clients ?? [])]);
     // parent_link_type is "WLAN" or "LAN"; default to "LAN" if missing.
     const linkType = node.parent_link_type || "LAN";
     const isWifi   = linkType === "WLAN";
@@ -613,7 +618,7 @@ class FritzMeshCard extends HTMLElement {
           </div>
         </div>
         <div class="clients">
-          ${[...clients].sort(clientSort).map((c) => this._clientRow(c)).join("")}
+          ${this._sortClients([...clients]).map((c) => this._clientRow(c)).join("")}
         </div>
       </div>`;
   }
@@ -769,6 +774,105 @@ class FritzMeshCard extends HTMLElement {
     return client.ha_entity_mesh_node_id || client.ha_entity_id || client.ha_entity_connected_id || "";
   }
 
+  _sortSlaveNodes(nodes) {
+    const mode = this._config?.node_sort ?? "default";
+    if (mode === "default") return nodes;
+    const sorted = [...nodes];
+    if (mode === "name") {
+      sorted.sort((a, b) => this._compareName(a?.name, b?.name));
+      return sorted;
+    }
+    if (mode === "mac") {
+      sorted.sort((a, b) => this._compareMac(a?.mac, b?.mac) || this._compareName(a?.name, b?.name));
+      return sorted;
+    }
+    if (mode === "ip") {
+      sorted.sort((a, b) => this._compareIp(a?.ip, b?.ip) || this._compareMac(a?.mac, b?.mac) || this._compareName(a?.name, b?.name));
+      return sorted;
+    }
+    return nodes;
+  }
+
+  _sortClients(clients) {
+    const mode = this._config?.node_sort ?? "default";
+    if (mode === "default") {
+      return [...clients].sort(clientSort);
+    }
+    const sorted = [...clients];
+    if (mode === "name") {
+      sorted.sort((a, b) => this._compareName(a?.name || a?.mac, b?.name || b?.mac));
+      return sorted;
+    }
+    if (mode === "mac") {
+      sorted.sort((a, b) => this._compareMac(a?.mac, b?.mac) || this._compareName(a?.name || a?.mac, b?.name || b?.mac));
+      return sorted;
+    }
+    if (mode === "ip") {
+      sorted.sort((a, b) => this._compareIp(a?.ip, b?.ip) || this._compareMac(a?.mac, b?.mac) || this._compareName(a?.name || a?.mac, b?.name || b?.mac));
+      return sorted;
+    }
+    return [...clients].sort(clientSort);
+  }
+
+  _compareIp(a, b) {
+    const pa = this._ipParts(a);
+    const pb = this._ipParts(b);
+    if (!pa && !pb) return 0;
+    if (!pa) return 1;   // unknown IP last
+    if (!pb) return -1;  // known IP first
+    for (let i = 0; i < 4; i += 1) {
+      if (pa[i] !== pb[i]) return pa[i] - pb[i];
+    }
+    return 0;
+  }
+
+  _compareMac(a, b) {
+    const ma = this._macParts(a);
+    const mb = this._macParts(b);
+    if (!ma && !mb) {
+      return this._normString(a).localeCompare(this._normString(b));
+    }
+    if (!ma) return 1;   // unknown MAC last
+    if (!mb) return -1;  // known MAC first
+    for (let i = 0; i < 6; i += 1) {
+      if (ma[i] !== mb[i]) return ma[i] - mb[i];
+    }
+    return 0;
+  }
+
+  _ipParts(ip) {
+    const s = String(ip || "").trim().split("/", 1)[0];
+    const parts = s.split(".");
+    if (parts.length !== 4) return null;
+    const out = [];
+    for (const p of parts) {
+      const n = Number(p);
+      if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+      out.push(n);
+    }
+    return out;
+  }
+
+  _macParts(mac) {
+    const s = String(mac || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (s.length !== 12) return null;
+    const out = [];
+    for (let i = 0; i < 12; i += 2) {
+      const n = Number.parseInt(s.slice(i, i + 2), 16);
+      if (!Number.isFinite(n)) return null;
+      out.push(n);
+    }
+    return out;
+  }
+
+  _compareName(a, b) {
+    return this._normString(a).localeCompare(this._normString(b));
+  }
+
+  _normString(v) {
+    return String(v || "").trim().toLowerCase();
+  }
+
   _configStyles() {
     const lineColor = sanitizeHexColor(this._config?.line_color, "#4caf50");
     const accentColor = sanitizeHexColor(this._config?.accent_color, "#1976d2");
@@ -845,6 +949,7 @@ class FritzMeshCardEditor extends HTMLElement {
     const currentTitle = this._config.title ?? "";
     const currentUrlTemplate = this._config.url_template ?? "http://{ip}";
     const currentNameInfoDisplay = this._config.name_info_display ?? "mesh_node";
+    const currentNodeSort = this._config.node_sort ?? "default";
     const currentLineColor = sanitizeHexColor(this._config.line_color, "#4caf50");
     const currentAccentColor = sanitizeHexColor(this._config.accent_color, "#1976d2");
     const currentTextDimColor = sanitizeHexColor(this._config.text_dim_color, "#888888");
@@ -928,6 +1033,17 @@ class FritzMeshCardEditor extends HTMLElement {
         </div>
 
         <div>
+          <label for="node-sort">Node sorting</label>
+          <select id="node-sort">
+            <option value="default" ${currentNodeSort === "default" ? "selected" : ""}>Default</option>
+            <option value="name" ${currentNodeSort === "name" ? "selected" : ""}>By name</option>
+            <option value="ip" ${currentNodeSort === "ip" ? "selected" : ""}>By IP</option>
+            <option value="mac" ${currentNodeSort === "mac" ? "selected" : ""}>By MAC</option>
+          </select>
+          <div class="hint">Sorts slave/repeater nodes in the topology list.</div>
+        </div>
+
+        <div>
           <label for="url-template">URL template (for IP clicks)</label>
           <input
             id="url-template"
@@ -974,6 +1090,7 @@ class FritzMeshCardEditor extends HTMLElement {
     const entityInput = this.shadowRoot.querySelector("#entity-input");
     const titleInput = this.shadowRoot.querySelector("#title-input");
     const nameInfoDisplayInput = this.shadowRoot.querySelector("#name-info-display");
+    const nodeSortInput = this.shadowRoot.querySelector("#node-sort");
     const urlTemplateInput = this.shadowRoot.querySelector("#url-template");
     const lineColorInput = this.shadowRoot.querySelector("#line-color");
     const accentColorInput = this.shadowRoot.querySelector("#accent-color");
@@ -1009,6 +1126,12 @@ class FritzMeshCardEditor extends HTMLElement {
     nameInfoDisplayInput?.addEventListener("change", (e) => {
       const val = e.target.value;
       const cfg = { ...this._config, name_info_display: val };
+      this._dispatch(cfg);
+    });
+
+    nodeSortInput?.addEventListener("change", (e) => {
+      const val = e.target.value;
+      const cfg = { ...this._config, node_sort: val };
       this._dispatch(cfg);
     });
 

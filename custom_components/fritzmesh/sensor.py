@@ -425,7 +425,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
             list, dict, None) so they survive the HA state machine serialisation.
         """
         data = self.coordinator.data
-        client_entity_ids = self._client_entity_id_map()
+        mesh_node_entity_ids, connected_entity_ids = self._client_entity_id_maps()
 
         # Order: master first (sort key 0), then slaves alphabetically.
         # This ordering is what the Lovelace card expects; the first node
@@ -450,7 +450,9 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                     "cur_tx_kbps":      c.cur_tx_kbps,       # current transmit speed
                     "max_rx_kbps":      c.max_rx_kbps,       # max (negotiated) receive speed
                     "max_tx_kbps":      c.max_tx_kbps,       # max (negotiated) transmit speed
-                    "ha_entity_id":     client_entity_ids.get(c.mac.upper()),
+                    "ha_entity_id":               mesh_node_entity_ids.get(c.mac.upper()),
+                    "ha_entity_mesh_node_id":     mesh_node_entity_ids.get(c.mac.upper()),
+                    "ha_entity_connected_id":     connected_entity_ids.get(c.mac.upper()),
                 }
                 for c in node.clients
             ]
@@ -481,7 +483,9 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                 "cur_tx_kbps":      client.cur_tx_kbps,
                 "max_rx_kbps":      client.max_rx_kbps,
                 "max_tx_kbps":      client.max_tx_kbps,
-                "ha_entity_id":     client_entity_ids.get(client.mac.upper()),
+                "ha_entity_id":               mesh_node_entity_ids.get(client.mac.upper()),
+                "ha_entity_mesh_node_id":     mesh_node_entity_ids.get(client.mac.upper()),
+                "ha_entity_connected_id":     connected_entity_ids.get(client.mac.upper()),
             }
             # Iterate over clients_by_mac to find the ones with mesh_node=None.
             for client, mesh_node in data.clients_by_mac.values()
@@ -494,21 +498,27 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
             "unassigned_clients": unassigned,
         }
 
-    def _client_entity_id_map(self) -> dict[str, str]:
-        """Map client MAC addresses to their mesh-node sensor entity IDs."""
+    def _client_entity_id_maps(self) -> tuple[dict[str, str], dict[str, str]]:
+        """Map client MAC addresses to mesh-node and connectivity entity IDs."""
         if self.hass is None:
-            return {}
+            return {}, {}
 
         registry = er.async_get(self.hass)
         entries = er.async_entries_for_config_entry(registry, self._entry_id)
         prefix = f"{self._entry_id}_"
-        suffix = "_mesh_node"
+        mesh_node_suffix = "_mesh_node"
+        connected_suffix = "_connected"
 
-        mapping: dict[str, str] = {}
+        mesh_node_mapping: dict[str, str] = {}
+        connected_mapping: dict[str, str] = {}
         for entity in entries:
             unique_id = entity.unique_id or ""
-            if not unique_id.startswith(prefix) or not unique_id.endswith(suffix):
+            if not unique_id.startswith(prefix):
                 continue
-            mac = unique_id[len(prefix):-len(suffix)].upper()
-            mapping[mac] = entity.entity_id
-        return mapping
+            if unique_id.endswith(mesh_node_suffix):
+                mac = unique_id[len(prefix):-len(mesh_node_suffix)].upper()
+                mesh_node_mapping[mac] = entity.entity_id
+            elif unique_id.endswith(connected_suffix):
+                mac = unique_id[len(prefix):-len(connected_suffix)].upper()
+                connected_mapping[mac] = entity.entity_id
+        return mesh_node_mapping, connected_mapping

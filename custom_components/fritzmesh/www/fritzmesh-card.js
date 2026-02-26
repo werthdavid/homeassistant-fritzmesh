@@ -35,7 +35,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.5.1";
+const CARD_VERSION = "1.5.3";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -302,19 +302,14 @@ class FritzMeshCard extends HTMLElement {
       console.error(msg);
       throw new Error(msg);
     }
-    const clickBehavior = config.click_behavior ?? "more_info";
-    if (!["more_info", "go_to_url"].includes(clickBehavior)) {
-      throw new Error("fritzmesh-card: click_behavior must be 'more_info' or 'go_to_url'");
-    }
-    // Backward compatibility: old configs may still carry "mesh_node".
-    const rawNameInfoDisplay = config.name_info_display ?? "none";
-    const nameInfoDisplay = rawNameInfoDisplay === "mesh_node" ? "none" : rawNameInfoDisplay;
-    if (!["none", "connection_state"].includes(nameInfoDisplay)) {
-      throw new Error("fritzmesh-card: name_info_display must be 'none' or 'connection_state'");
+    // Backward compatibility: old configs may still carry "none".
+    const rawNameInfoDisplay = config.name_info_display ?? "mesh_node";
+    const nameInfoDisplay = rawNameInfoDisplay === "none" ? "mesh_node" : rawNameInfoDisplay;
+    if (!["mesh_node", "connection_state"].includes(nameInfoDisplay)) {
+      throw new Error("fritzmesh-card: name_info_display must be 'mesh_node' or 'connection_state'");
     }
     this._config = {
       ...config,
-      click_behavior: clickBehavior,
       url_template: config.url_template ?? "http://{ip}",
       name_info_display: nameInfoDisplay,
     };
@@ -618,8 +613,7 @@ class FritzMeshCard extends HTMLElement {
     const label = connLabel(client);                         // "5 GHz → 867 Mbit/s" etc.
     const name  = client.name || client.mac || "?";         // display name fallback chain
     const ip = client.ip || "";
-    const entityId = client.ha_entity_id || "";
-    const infoText = this._nameInfoText(client);
+    const entityId = this._resolveMoreInfoEntityId(client);
 
     return `
       <div class="client-row${on ? "" : " off"}">
@@ -637,7 +631,6 @@ class FritzMeshCard extends HTMLElement {
           data-entity-id="${encodeURIComponent(entityId)}"
           data-ip="${encodeURIComponent(ip)}"
         >${esc(name)}</button>
-        ${infoText ? `<span class="cl-meta">${esc(infoText)}</span>` : ""}
         <!-- IP address (shown only when known) -->
         ${ip
           ? `<button
@@ -693,17 +686,11 @@ class FritzMeshCard extends HTMLElement {
   }
 
   _handleClientAction(el) {
-    const behavior = this._config?.click_behavior ?? "more_info";
     const source = el.dataset.clickSource || "name";
     const entityId = decodeURIComponent(el.dataset.entityId || "");
     const ip = decodeURIComponent(el.dataset.ip || "");
 
     if (source === "ip") {
-      this._openClientUrl(ip);
-      return;
-    }
-
-    if (behavior === "go_to_url") {
       this._openClientUrl(ip);
       return;
     }
@@ -738,12 +725,12 @@ class FritzMeshCard extends HTMLElement {
     return url;
   }
 
-  _nameInfoText(client) {
-    const mode = this._config?.name_info_display ?? "none";
+  _resolveMoreInfoEntityId(client) {
+    const mode = this._config?.name_info_display ?? "mesh_node";
     if (mode === "connection_state") {
-      return client.connection_state === "CONNECTED" ? "Connected" : "Disconnected";
+      return client.ha_entity_connected_id || client.ha_entity_id || "";
     }
-    return "";
+    return client.ha_entity_mesh_node_id || client.ha_entity_id || client.ha_entity_connected_id || "";
   }
 
   _ensureResizeObserver() {
@@ -800,9 +787,8 @@ class FritzMeshCardEditor extends HTMLElement {
     const entities = this._applicableEntities();
     const currentEntity = this._config.entity ?? "";
     const currentTitle = this._config.title ?? "";
-    const currentClickBehavior = this._config.click_behavior ?? "more_info";
     const currentUrlTemplate = this._config.url_template ?? "http://{ip}";
-    const currentNameInfoDisplay = this._config.name_info_display ?? "none";
+    const currentNameInfoDisplay = this._config.name_info_display ?? "mesh_node";
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -871,31 +857,21 @@ class FritzMeshCardEditor extends HTMLElement {
         </div>
 
         <div>
-          <label for="click-behavior">Click behavior</label>
-          <select id="click-behavior">
-            <option value="more_info" ${currentClickBehavior === "more_info" ? "selected" : ""}>More info</option>
-            <option value="go_to_url" ${currentClickBehavior === "go_to_url" ? "selected" : ""}>Go to URL</option>
-          </select>
-          <div class="hint">Controls what happens when clicking a device name or IP.</div>
-        </div>
-
-        <div>
           <label for="name-info-display">Name detail display</label>
           <select id="name-info-display">
-            <option value="none" ${currentNameInfoDisplay === "none" ? "selected" : ""}>None</option>
+            <option value="mesh_node" ${currentNameInfoDisplay === "mesh_node" ? "selected" : ""}>Connected mesh node</option>
             <option value="connection_state" ${currentNameInfoDisplay === "connection_state" ? "selected" : ""}>Connection state</option>
           </select>
-          <div class="hint">Show extra info next to each device name.</div>
+          <div class="hint">Defines what the More Info popup shows when clicking a device name.</div>
         </div>
 
         <div>
-          <label for="url-template">URL template (for "Go to URL")</label>
+          <label for="url-template">URL template (for IP clicks)</label>
           <input
             id="url-template"
             type="text"
             placeholder="http://{ip}"
             value="${esc(currentUrlTemplate)}"
-            ${currentClickBehavior !== "go_to_url" ? "disabled" : ""}
           />
           <div class="hint">Use <code>{ip}</code> as placeholder, e.g. <code>https://{ip}</code>.</div>
         </div>
@@ -904,7 +880,6 @@ class FritzMeshCardEditor extends HTMLElement {
     const entitySelect = this.shadowRoot.querySelector("#entity-select");
     const entityInput = this.shadowRoot.querySelector("#entity-input");
     const titleInput = this.shadowRoot.querySelector("#title-input");
-    const clickBehaviorInput = this.shadowRoot.querySelector("#click-behavior");
     const nameInfoDisplayInput = this.shadowRoot.querySelector("#name-info-display");
     const urlTemplateInput = this.shadowRoot.querySelector("#url-template");
 
@@ -929,15 +904,6 @@ class FritzMeshCardEditor extends HTMLElement {
       const cfg = { ...this._config };
       if (val !== "") cfg.title = val;
       else delete cfg.title;
-      this._dispatch(cfg);
-    });
-
-    clickBehaviorInput?.addEventListener("change", (e) => {
-      const val = e.target.value;
-      const cfg = { ...this._config, click_behavior: val };
-      if (urlTemplateInput) {
-        urlTemplateInput.disabled = val !== "go_to_url";
-      }
       this._dispatch(cfg);
     });
 
@@ -1309,13 +1275,6 @@ ha-card {
 
 /* IP address in monospace (only shown when known). */
 .cl-ip { font-size: .68em; font-family: monospace; color: var(--text-dim); white-space: nowrap; margin-left: 2px; flex-shrink: 0; }
-.cl-meta {
-  font-size: .68em;
-  color: var(--text-dim);
-  white-space: nowrap;
-  margin-left: 4px;
-  flex-shrink: 0;
-}
 
 /* Click actions (name and IP) */
 .client-action {

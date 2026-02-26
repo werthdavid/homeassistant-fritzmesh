@@ -1509,6 +1509,7 @@ ha-card {
   width: 14px;
 }
 :host([data-size="compact"]) .clients {
+  margin-left: 0;
   padding-left: 0;
 }
 :host([data-size="compact"]) .slave-card {
@@ -1640,7 +1641,10 @@ ha-card {
   display: flex;
   flex-direction: column;
   gap: 1px;           /* tight spacing for dense lists */
-  padding-left: 10px; /* indent relative to the section backbone */
+  /* Pull client rows back to the section start so each cl-line begins at the
+     vertical backbone without a visible gap. */
+  margin-left: -22px;
+  padding-left: 0;
 }
 
 /* ── Individual client row ── */

@@ -525,6 +525,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                     "vendor":           node.vendor,
                     "firmware":         node.firmware,
                     "parent_link_type": node.parent_link_type,  # "WLAN"/"LAN" for slaves
+                    "parent_link_state": node.parent_link_state,  # "CONNECTED"/"DISCONNECTED"
                     "parent_cur_rx_kbps": node.parent_cur_rx_kbps,
                     "parent_cur_tx_kbps": node.parent_cur_tx_kbps,
                     "parent_max_rx_kbps": node.parent_max_rx_kbps,

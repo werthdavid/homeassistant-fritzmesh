@@ -82,6 +82,7 @@ The card supports full UI configuration in Lovelace Visual Editor:
 | Name detail display | `Connected mesh node`, `Connection state` | Defines which entity is shown in **More Info** when clicking a device name |
 | Node sorting | `Default`, `By name`, `By IP`, `By MAC` | Sort order for repeater sections and client lists |
 | Transfer metric mode | `Aggregate`, `Uplink only`, `Max single client`, `Average client` | Metric shown as TX/RX label on master and repeater cards |
+| Hide offline nodes | `on`, `off` | Hides disconnected repeaters and disconnected/unassigned client devices |
 | URL template | e.g. `http://{ip}`, `https://{ip}` | Used when clicking IP addresses (IPs are always clickable) |
 | Line / Accent / Text colors | color pickers | Card appearance customization |
 | Master panel gradient start/end | color pickers | Color customization for the blue mesh-master panel |

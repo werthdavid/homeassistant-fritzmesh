@@ -24,6 +24,8 @@
  *   entity: sensor.fritzmesh_topology   # required – the FritzMeshTopologySensor
  *   title: Fritz!Box Mesh               # optional; omit to use default title,
  *                                       # set to "" to hide the header entirely
+ *   hide_offline_nodes: true            # optional; hide repeaters with
+ *                                       # disconnected uplinks
  *
  * Data flow:
  *   Home Assistant state machine
@@ -35,7 +37,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.9.0";
+const CARD_VERSION = "1.9.2";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -344,12 +346,14 @@ class FritzMeshCard extends HTMLElement {
         "fritzmesh-card: transfer_metric_mode must be 'aggregate', 'uplink', 'max_single', or 'average'"
       );
     }
+    const hideOfflineNodes = config.hide_offline_nodes === true;
     this._config = {
       ...config,
       url_template: config.url_template ?? "http://{ip}",
       name_info_display: nameInfoDisplay,
       node_sort: nodeSort,
       transfer_metric_mode: transferMetricMode,
+      hide_offline_nodes: hideOfflineNodes,
       line_color: sanitizeHexColor(config.line_color, "#4caf50"),
       accent_color: sanitizeHexColor(config.accent_color, "#1976d2"),
       text_dim_color: sanitizeHexColor(config.text_dim_color, "#888888"),
@@ -485,7 +489,10 @@ class FritzMeshCard extends HTMLElement {
     // The topology sensor always sorts master first, but we find it explicitly
     // for clarity and resilience.
     const master = nodes.find((n) => n.role === "master") ?? nodes[0];
-    const slaves = this._sortSlaveNodes(nodes.filter((n) => n !== master));
+    let slaves = this._sortSlaveNodes(nodes.filter((n) => n !== master));
+    if (this._config.hide_offline_nodes) {
+      slaves = slaves.filter((node) => this._isNodeOnline(node));
+    }
 
     // Build the two-column layout:
     //   Left  → sticky master panel (blue gradient card with router icon)
@@ -496,7 +503,7 @@ class FritzMeshCard extends HTMLElement {
         <div class="tree">
           ${this._masterSection(master)}
           ${slaves.map((s) => this._slaveSection(s)).join("")}
-          ${unassigned.length ? this._unassignedSection(unassigned) : ""}
+          ${!this._config.hide_offline_nodes && unassigned.length ? this._unassignedSection(unassigned) : ""}
         </div>
       </div>`);
   }
@@ -540,7 +547,7 @@ class FritzMeshCard extends HTMLElement {
    */
   _masterSection(node) {
     // Sort a copy to avoid mutating the original attribute array.
-    const clients = this._sortClients([...(node?.clients ?? [])]);
+    const clients = this._sortClients(this._visibleClients([...(node?.clients ?? [])]));
     return `
       <div class="section">
         <div class="section-row">
@@ -569,7 +576,7 @@ class FritzMeshCard extends HTMLElement {
    * @returns {string} HTML string for the slave section.
    */
   _slaveSection(node) {
-    const clients  = this._sortClients([...(node?.clients ?? [])]);
+    const clients  = this._sortClients(this._visibleClients([...(node?.clients ?? [])]));
     const nodeRates = this._nodeRateLabel(node);
     // parent_link_type is "WLAN" or "LAN"; default to "LAN" if missing.
     const linkType = node.parent_link_type || "LAN";
@@ -850,6 +857,21 @@ class FritzMeshCard extends HTMLElement {
     return nodes;
   }
 
+  _isNodeOnline(node) {
+    if (!node) return false;
+    if (node.role === "master") return true;
+    const linkState = String(node.parent_link_state || "").toUpperCase();
+    // If the attribute is missing (older integration payload), keep the node
+    // visible for backwards compatibility.
+    if (!linkState) return true;
+    return linkState === "CONNECTED";
+  }
+
+  _visibleClients(clients) {
+    if (!this._config?.hide_offline_nodes) return clients;
+    return clients.filter((client) => String(client?.connection_state || "").toUpperCase() === "CONNECTED");
+  }
+
   _sortClients(clients) {
     const mode = this._config?.node_sort ?? "default";
     if (mode === "default") {
@@ -1008,6 +1030,7 @@ class FritzMeshCardEditor extends HTMLElement {
     const currentNameInfoDisplay = this._config.name_info_display ?? "mesh_node";
     const currentNodeSort = this._config.node_sort ?? "default";
     const currentTransferMetricMode = this._config.transfer_metric_mode ?? "aggregate";
+    const currentHideOfflineNodes = this._config.hide_offline_nodes === true;
     const currentLineColor = sanitizeHexColor(this._config.line_color, "#4caf50");
     const currentAccentColor = sanitizeHexColor(this._config.accent_color, "#1976d2");
     const currentTextDimColor = sanitizeHexColor(this._config.text_dim_color, "#888888");
@@ -1044,6 +1067,17 @@ class FritzMeshCardEditor extends HTMLElement {
           margin-top: 4px;
           font-size: 0.78rem;
           color: var(--secondary-text-color, #777);
+        }
+        .toggle-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 0;
+        }
+        .toggle-row input[type="checkbox"] {
+          width: auto;
+          margin: 0;
+          padding: 0;
         }
       </style>
       <div class="card-config">
@@ -1113,6 +1147,18 @@ class FritzMeshCardEditor extends HTMLElement {
         </div>
 
         <div>
+          <label class="toggle-row" for="hide-offline-nodes">
+            <input
+              id="hide-offline-nodes"
+              type="checkbox"
+              ${currentHideOfflineNodes ? "checked" : ""}
+            />
+            <span>Hide offline nodes</span>
+          </label>
+          <div class="hint">Hides disconnected repeaters, disconnected clients, and all unassigned devices.</div>
+        </div>
+
+        <div>
           <label for="url-template">URL template (for IP clicks)</label>
           <input
             id="url-template"
@@ -1161,6 +1207,7 @@ class FritzMeshCardEditor extends HTMLElement {
     const nameInfoDisplayInput = this.shadowRoot.querySelector("#name-info-display");
     const nodeSortInput = this.shadowRoot.querySelector("#node-sort");
     const transferMetricModeInput = this.shadowRoot.querySelector("#transfer-metric-mode");
+    const hideOfflineNodesInput = this.shadowRoot.querySelector("#hide-offline-nodes");
     const urlTemplateInput = this.shadowRoot.querySelector("#url-template");
     const lineColorInput = this.shadowRoot.querySelector("#line-color");
     const accentColorInput = this.shadowRoot.querySelector("#accent-color");
@@ -1208,6 +1255,13 @@ class FritzMeshCardEditor extends HTMLElement {
     transferMetricModeInput?.addEventListener("change", (e) => {
       const val = e.target.value;
       const cfg = { ...this._config, transfer_metric_mode: val };
+      this._dispatch(cfg);
+    });
+
+    hideOfflineNodesInput?.addEventListener("change", (e) => {
+      const cfg = { ...this._config };
+      if (e.target.checked) cfg.hide_offline_nodes = true;
+      else delete cfg.hide_offline_nodes;
       this._dispatch(cfg);
     });
 

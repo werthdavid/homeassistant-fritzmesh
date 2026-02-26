@@ -431,6 +431,9 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
     has_entity_name = True
     _attr_icon = "mdi:router-network"
     _attr_native_unit_of_measurement = "nodes"
+    # Keep large topology payload available in HA state for the Lovelace card,
+    # but prevent recorder from persisting it to avoid the 16 KiB DB limit.
+    _unrecorded_attributes = frozenset({"mesh_nodes", "unassigned_clients"})
 
     def __init__(
         self,

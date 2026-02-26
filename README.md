@@ -59,6 +59,7 @@ I have no business relationship with AVM, and this software is provided for info
    | Password | _(empty)_ | FRITZ!Box password |
    | Use TLS | off | Enable for HTTPS (set port to 49443) |
    | Poll interval | `60` | Seconds between topology refreshes |
+   | Debug raw JSON output | `off` | `off`, `log`, `file`, `log_and_file` |
 
 3. Click **Submit** — HA validates the credentials and creates the integration
 
@@ -106,6 +107,12 @@ entity: sensor.fritz_box_mesh_192_168_178_1_topology
 - Ensure devices are configured as a FRITZ!Box mesh (not just WiFi extenders)
   — FRITZ!Box UI → **Home Network → Mesh**
 
+**Need to inspect raw FRITZ!Box mesh JSON:**
+- Set **Debug raw JSON output** to:
+  - `log` → writes JSON to Home Assistant logs
+  - `file` → writes JSON to `config/fritzmesh_debug/<host>_mesh_raw.json`
+  - `log_and_file` → both
+
 ---
 
 ## How It Works
@@ -116,4 +123,3 @@ Uses the [FRITZconnection](https://github.com/kbr/FRITZconnection) Python librar
 2. Fetches the mesh JSON from the FRITZ!Box (authenticated)
 3. Parses `nodes[] → node_interfaces[] → node_links[]` to build the topology tree
 4. Cross-references with `FRITZHosts.get_hosts_info()` to add IP addresses and hostnames
-

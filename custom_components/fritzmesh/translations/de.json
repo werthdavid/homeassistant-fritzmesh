@@ -10,7 +10,8 @@
           "username": "Benutzername",
           "password": "Passwort",
           "use_tls": "TLS verwenden (HTTPS)",
-          "poll_interval": "Abfrageintervall (Sekunden)"
+          "poll_interval": "Abfrageintervall (Sekunden)",
+          "debug_mode": "Debug-Roh-JSON-Ausgabe"
         }
       }
     },
@@ -21,6 +22,18 @@
     },
     "abort": {
       "already_configured": "Diese FRITZ!Box ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "FRITZ! Mesh Optionen",
+        "description": "Abfrage und Debug-Ausgabe anpassen.",
+        "data": {
+          "poll_interval": "Abfrageintervall (Sekunden)",
+          "debug_mode": "Debug-Roh-JSON-Ausgabe"
+        }
+      }
     }
   }
 }

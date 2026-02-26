@@ -34,13 +34,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+import json
 import logging
+from pathlib import Path
+import re
 from typing import Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    DEBUG_MODE_FILE,
+    DEBUG_MODE_LOG,
+    DEBUG_MODE_LOG_AND_FILE,
+)
 from .fritz_mesh import FritzMeshFetcher, MeshNode, ClientDevice, MeshTopology
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,6 +107,7 @@ class FritzMeshCoordinator(DataUpdateCoordinator[FritzMeshData]):
         password: str,
         use_tls: bool,
         poll_interval: int,
+        debug_mode: str,
     ) -> None:
         """Initialise the coordinator.
 
@@ -126,6 +135,7 @@ class FritzMeshCoordinator(DataUpdateCoordinator[FritzMeshData]):
         self._username = username
         self._password = password
         self._use_tls  = use_tls
+        self._debug_mode = debug_mode
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -150,7 +160,30 @@ class FritzMeshCoordinator(DataUpdateCoordinator[FritzMeshData]):
             password=self._password,
             use_tls=self._use_tls,
         )
-        return fetcher.fetch()
+        topology = fetcher.fetch()
+        self._handle_debug_dump(topology)
+        return topology
+
+    def _handle_debug_dump(self, topology: MeshTopology) -> None:
+        """Emit raw topology JSON for troubleshooting, according to debug mode."""
+        if self._debug_mode not in (DEBUG_MODE_LOG, DEBUG_MODE_FILE, DEBUG_MODE_LOG_AND_FILE):
+            return
+
+        try:
+            raw_json = json.dumps(topology.raw, ensure_ascii=False, indent=2)
+
+            if self._debug_mode in (DEBUG_MODE_LOG, DEBUG_MODE_LOG_AND_FILE):
+                _LOGGER.info("FRITZ!Mesh raw topology JSON (%s):\n%s", self._host, raw_json)
+
+            if self._debug_mode in (DEBUG_MODE_FILE, DEBUG_MODE_LOG_AND_FILE):
+                safe_host = re.sub(r"[^a-zA-Z0-9._-]", "_", self._host)
+                debug_dir = Path(self.hass.config.path("fritzmesh_debug"))
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                out_path = debug_dir / f"{safe_host}_mesh_raw.json"
+                out_path.write_text(raw_json, encoding="utf-8")
+                _LOGGER.info("FRITZ!Mesh raw topology JSON written to %s", out_path)
+        except Exception as err:
+            _LOGGER.warning("Could not write FRITZ!Mesh debug raw JSON: %s", err)
 
     # ── DataUpdateCoordinator interface ───────────────────────────────────────
 

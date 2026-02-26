@@ -10,7 +10,8 @@
           "username": "Username",
           "password": "Password",
           "use_tls": "Use TLS (HTTPS)",
-          "poll_interval": "Poll interval (seconds)"
+          "poll_interval": "Poll interval (seconds)",
+          "debug_mode": "Debug raw JSON output"
         }
       }
     },
@@ -21,6 +22,18 @@
     },
     "abort": {
       "already_configured": "This Fritz!Box is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fritz!Box Mesh Options",
+        "description": "Adjust polling and debug output.",
+        "data": {
+          "poll_interval": "Poll interval (seconds)",
+          "debug_mode": "Debug raw JSON output"
+        }
+      }
     }
   }
 }

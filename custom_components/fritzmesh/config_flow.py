@@ -34,10 +34,13 @@ from .const import (
     CONF_PASSWORD,
     CONF_USE_TLS,
     CONF_POLL_INTERVAL,
+    CONF_DEBUG_MODE,
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_USE_TLS,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_DEBUG_MODE,
+    DEBUG_MODE_CHOICES,
 )
 from .fritz_mesh import FritzMeshFetcher
 
@@ -61,8 +64,26 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Optional(CONF_PASSWORD, default=""): str,
         vol.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): bool,
         vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): int,
+        vol.Required(CONF_DEBUG_MODE, default=DEFAULT_DEBUG_MODE): vol.In(DEBUG_MODE_CHOICES),
     }
 )
+
+def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schema:
+    """Build options schema with fallbacks to existing entry data."""
+    current_poll = config_entry.options.get(
+        CONF_POLL_INTERVAL,
+        config_entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+    )
+    current_debug = config_entry.options.get(
+        CONF_DEBUG_MODE,
+        config_entry.data.get(CONF_DEBUG_MODE, DEFAULT_DEBUG_MODE),
+    )
+    return vol.Schema(
+        {
+            vol.Required(CONF_POLL_INTERVAL, default=current_poll): int,
+            vol.Required(CONF_DEBUG_MODE, default=current_debug): vol.In(DEBUG_MODE_CHOICES),
+        }
+    )
 
 
 async def _validate_input(hass: HomeAssistant, data: dict) -> None:
@@ -104,6 +125,13 @@ class FritzMeshConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Return the options flow handler."""
+        return FritzMeshOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
         """Handle the initial setup step shown to the user.
@@ -161,4 +189,22 @@ class FritzMeshConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_SCHEMA,
             errors=errors,
+        )
+
+
+class FritzMeshOptionsFlow(config_entries.OptionsFlow):
+    """Handle options for an existing Fritz!Box Mesh config entry."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialise options flow."""
+        self._config_entry = config_entry
+
+    async def async_step_init(self, user_input: dict | None = None) -> FlowResult:
+        """Manage options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_build_options_schema(self._config_entry),
         )

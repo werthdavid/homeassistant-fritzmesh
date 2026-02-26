@@ -35,7 +35,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.5.3";
+const CARD_VERSION = "1.6.2";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -115,6 +115,27 @@ const esc = (s) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+
+const HEX_COLOR_RE = /^#([0-9a-fA-F]{6})$/;
+
+function sanitizeHexColor(value, fallback) {
+  const v = String(value ?? "").trim();
+  return HEX_COLOR_RE.test(v) ? v : fallback;
+}
+
+function hexToRgba(hex, alpha) {
+  const clean = sanitizeHexColor(hex, "#000000").slice(1);
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function sanitizeFontScale(value, fallback = 100) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(80, Math.min(140, Math.round(n)));
+}
 
 /**
  * Format a speed value from kbit/s to a human-readable string.
@@ -312,7 +333,21 @@ class FritzMeshCard extends HTMLElement {
       ...config,
       url_template: config.url_template ?? "http://{ip}",
       name_info_display: nameInfoDisplay,
+      line_color: sanitizeHexColor(config.line_color, "#4caf50"),
+      accent_color: sanitizeHexColor(config.accent_color, "#1976d2"),
+      text_dim_color: sanitizeHexColor(config.text_dim_color, "#888888"),
+      master_panel_start_color: sanitizeHexColor(config.master_panel_start_color, "#1565c0"),
+      master_panel_end_color: sanitizeHexColor(config.master_panel_end_color, "#1e88e5"),
+      font_scale: sanitizeFontScale(config.font_scale, 100),
     };
+
+    // Config-only changes (e.g. colors/font scale) should re-render immediately
+    // even when the entity attributes themselves didn't change.
+    this._lastKey = "";
+    if (this._hass) {
+      const state = this._hass?.states?.[this._config.entity];
+      this._render(state);
+    }
   }
 
   /**
@@ -658,8 +693,9 @@ class FritzMeshCard extends HTMLElement {
    * @param {string} body  - Inner HTML to place inside the card body div.
    */
   _setHTML(title, body) {
+    const cfgStyles = this._configStyles();
     this.shadowRoot.innerHTML = `
-      <style>${STYLES}</style>
+      <style>${STYLES}${cfgStyles}</style>
       <ha-card>
         ${title ? `<div class="card-header">${esc(title)}</div>` : ""}
         <div class="card-body">${body}</div>
@@ -733,6 +769,26 @@ class FritzMeshCard extends HTMLElement {
     return client.ha_entity_mesh_node_id || client.ha_entity_id || client.ha_entity_connected_id || "";
   }
 
+  _configStyles() {
+    const lineColor = sanitizeHexColor(this._config?.line_color, "#4caf50");
+    const accentColor = sanitizeHexColor(this._config?.accent_color, "#1976d2");
+    const textDimColor = sanitizeHexColor(this._config?.text_dim_color, "#888888");
+    const masterPanelStart = sanitizeHexColor(this._config?.master_panel_start_color, "#1565c0");
+    const masterPanelEnd = sanitizeHexColor(this._config?.master_panel_end_color, "#1e88e5");
+    const fontScale = sanitizeFontScale(this._config?.font_scale, 100);
+    return `
+:host {
+  --green: ${lineColor};
+  --green-fade: ${hexToRgba(lineColor, 0.18)};
+  --blue: ${accentColor};
+  --text-dim: ${textDimColor};
+  --master-panel-start: ${masterPanelStart};
+  --master-panel-end: ${masterPanelEnd};
+  --fm-font-scale: ${fontScale}%;
+}
+`;
+  }
+
   _ensureResizeObserver() {
     if (this._resizeObserver) return;
     this._resizeObserver = new ResizeObserver((entries) => {
@@ -789,6 +845,12 @@ class FritzMeshCardEditor extends HTMLElement {
     const currentTitle = this._config.title ?? "";
     const currentUrlTemplate = this._config.url_template ?? "http://{ip}";
     const currentNameInfoDisplay = this._config.name_info_display ?? "mesh_node";
+    const currentLineColor = sanitizeHexColor(this._config.line_color, "#4caf50");
+    const currentAccentColor = sanitizeHexColor(this._config.accent_color, "#1976d2");
+    const currentTextDimColor = sanitizeHexColor(this._config.text_dim_color, "#888888");
+    const currentMasterPanelStart = sanitizeHexColor(this._config.master_panel_start_color, "#1565c0");
+    const currentMasterPanelEnd = sanitizeHexColor(this._config.master_panel_end_color, "#1e88e5");
+    const currentFontScale = sanitizeFontScale(this._config.font_scale, 100);
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -875,6 +937,37 @@ class FritzMeshCardEditor extends HTMLElement {
           />
           <div class="hint">Use <code>{ip}</code> as placeholder, e.g. <code>https://{ip}</code>.</div>
         </div>
+
+        <div>
+          <label for="line-color">Line color</label>
+          <input id="line-color" type="color" value="${esc(currentLineColor)}" />
+        </div>
+
+        <div>
+          <label for="accent-color">Accent color</label>
+          <input id="accent-color" type="color" value="${esc(currentAccentColor)}" />
+        </div>
+
+        <div>
+          <label for="text-dim-color">Secondary text color</label>
+          <input id="text-dim-color" type="color" value="${esc(currentTextDimColor)}" />
+        </div>
+
+        <div>
+          <label for="font-scale">Font size scale (%)</label>
+          <input id="font-scale" type="number" min="80" max="140" step="1" value="${esc(String(currentFontScale))}" />
+          <div class="hint">Scales all card text from 80% to 140%.</div>
+        </div>
+
+        <div>
+          <label for="master-panel-start-color">Master panel gradient start</label>
+          <input id="master-panel-start-color" type="color" value="${esc(currentMasterPanelStart)}" />
+        </div>
+
+        <div>
+          <label for="master-panel-end-color">Master panel gradient end</label>
+          <input id="master-panel-end-color" type="color" value="${esc(currentMasterPanelEnd)}" />
+        </div>
       </div>`;
 
     const entitySelect = this.shadowRoot.querySelector("#entity-select");
@@ -882,6 +975,12 @@ class FritzMeshCardEditor extends HTMLElement {
     const titleInput = this.shadowRoot.querySelector("#title-input");
     const nameInfoDisplayInput = this.shadowRoot.querySelector("#name-info-display");
     const urlTemplateInput = this.shadowRoot.querySelector("#url-template");
+    const lineColorInput = this.shadowRoot.querySelector("#line-color");
+    const accentColorInput = this.shadowRoot.querySelector("#accent-color");
+    const textDimColorInput = this.shadowRoot.querySelector("#text-dim-color");
+    const fontScaleInput = this.shadowRoot.querySelector("#font-scale");
+    const masterPanelStartColorInput = this.shadowRoot.querySelector("#master-panel-start-color");
+    const masterPanelEndColorInput = this.shadowRoot.querySelector("#master-panel-end-color");
 
     entitySelect?.addEventListener("change", (e) => {
       const val = e.target.value;
@@ -918,6 +1017,42 @@ class FritzMeshCardEditor extends HTMLElement {
       const cfg = { ...this._config };
       if (val) cfg.url_template = val;
       else delete cfg.url_template;
+      this._dispatch(cfg);
+    });
+
+    lineColorInput?.addEventListener("change", (e) => {
+      const cfg = { ...this._config, line_color: sanitizeHexColor(e.target.value, "#4caf50") };
+      this._dispatch(cfg);
+    });
+
+    accentColorInput?.addEventListener("change", (e) => {
+      const cfg = { ...this._config, accent_color: sanitizeHexColor(e.target.value, "#1976d2") };
+      this._dispatch(cfg);
+    });
+
+    textDimColorInput?.addEventListener("change", (e) => {
+      const cfg = { ...this._config, text_dim_color: sanitizeHexColor(e.target.value, "#888888") };
+      this._dispatch(cfg);
+    });
+
+    fontScaleInput?.addEventListener("change", (e) => {
+      const cfg = { ...this._config, font_scale: sanitizeFontScale(e.target.value, 100) };
+      this._dispatch(cfg);
+    });
+
+    masterPanelStartColorInput?.addEventListener("change", (e) => {
+      const cfg = {
+        ...this._config,
+        master_panel_start_color: sanitizeHexColor(e.target.value, "#1565c0"),
+      };
+      this._dispatch(cfg);
+    });
+
+    masterPanelEndColorInput?.addEventListener("change", (e) => {
+      const cfg = {
+        ...this._config,
+        master_panel_end_color: sanitizeHexColor(e.target.value, "#1e88e5"),
+      };
       this._dispatch(cfg);
     });
   }
@@ -981,6 +1116,7 @@ const STYLES = `
   display: block;
   height: 100%;
   min-height: 0;
+  font-size: var(--fm-font-scale, 100%);
   /* Green for connection lines; we avoid using HA theme green to guarantee
      visibility on both light and dark themes. */
   --green:      #4caf50;
@@ -1034,7 +1170,7 @@ ha-card {
   flex-shrink: 0;    /* never shrink; keep a fixed width */
   width: 152px;
   /* Blue gradient matching AVM's brand colours */
-  background: linear-gradient(155deg, #1565c0 0%, #1e88e5 100%);
+  background: linear-gradient(155deg, var(--master-panel-start, #1565c0) 0%, var(--master-panel-end, #1e88e5) 100%);
   color: #fff;
   border-radius: 12px;
   padding: 14px 12px;

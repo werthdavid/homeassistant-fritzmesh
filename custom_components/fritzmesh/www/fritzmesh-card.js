@@ -35,7 +35,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.7.3";
+const CARD_VERSION = "1.9.0";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -91,6 +91,11 @@ const ICON = {
     10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8
     8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2
     2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/>
+  </svg>`,
+
+  transfer: `<svg viewBox="0 0 24 24" fill="currentColor">
+    <path d="M7 6h10l-3.5-3.5 1.4-1.4L21.8 8l-6.9 6.9-1.4-1.4L17 10H7V6zm10
+    8H7l3.5 3.5-1.4 1.4L2.2 12l6.9-6.9 1.4 1.4L7 10h10v4z"/>
   </svg>`,
 };
 
@@ -333,11 +338,18 @@ class FritzMeshCard extends HTMLElement {
     if (!["default", "name", "ip", "mac"].includes(nodeSort)) {
       throw new Error("fritzmesh-card: node_sort must be 'default', 'name', 'ip', or 'mac'");
     }
+    const transferMetricMode = config.transfer_metric_mode ?? "aggregate";
+    if (!["aggregate", "uplink", "max_single", "average"].includes(transferMetricMode)) {
+      throw new Error(
+        "fritzmesh-card: transfer_metric_mode must be 'aggregate', 'uplink', 'max_single', or 'average'"
+      );
+    }
     this._config = {
       ...config,
       url_template: config.url_template ?? "http://{ip}",
       name_info_display: nameInfoDisplay,
       node_sort: nodeSort,
+      transfer_metric_mode: transferMetricMode,
       line_color: sanitizeHexColor(config.line_color, "#4caf50"),
       accent_color: sanitizeHexColor(config.accent_color, "#1976d2"),
       text_dim_color: sanitizeHexColor(config.text_dim_color, "#888888"),
@@ -502,6 +514,7 @@ class FritzMeshCard extends HTMLElement {
    * @returns {string} HTML string for the master panel div.
    */
   _masterPanel(node, host) {
+    const nodeRates = this._nodeRateLabel(node);
     return `
       <div class="master-panel">
         <div class="mp-icon">${ICON.router}</div>
@@ -509,6 +522,7 @@ class FritzMeshCard extends HTMLElement {
         ${node?.model    ? `<div class="mp-model">${esc(node.model)}</div>` : ""}
         ${host           ? `<div class="mp-ip">${esc(host)}</div>` : ""}
         ${node?.firmware ? `<div class="mp-fw">FW ${esc(node.firmware)}</div>` : ""}
+        ${nodeRates ? `<div class="mp-rate">${ICON.transfer}<span>${esc(nodeRates)}</span></div>` : ""}
         <div class="mp-badge">HEIMNETZ</div>
       </div>`;
   }
@@ -556,6 +570,7 @@ class FritzMeshCard extends HTMLElement {
    */
   _slaveSection(node) {
     const clients  = this._sortClients([...(node?.clients ?? [])]);
+    const nodeRates = this._nodeRateLabel(node);
     // parent_link_type is "WLAN" or "LAN"; default to "LAN" if missing.
     const linkType = node.parent_link_type || "LAN";
     const isWifi   = linkType === "WLAN";
@@ -574,6 +589,7 @@ class FritzMeshCard extends HTMLElement {
             <div class="sc-info">
               <div class="sc-name">${esc(node.name)}</div>
               ${node.model ? `<div class="sc-model">${esc(node.model)}</div>` : ""}
+              ${nodeRates ? `<div class="sc-rate">${ICON.transfer}<span>${esc(nodeRates)}</span></div>` : ""}
               <div class="sc-badge">${isWifi ? "WIFI REPEATER" : "REPEATER"}</div>
             </div>
           </div>
@@ -774,6 +790,47 @@ class FritzMeshCard extends HTMLElement {
     return client.ha_entity_mesh_node_id || client.ha_entity_id || client.ha_entity_connected_id || "";
   }
 
+  _nodeRateLabel(node) {
+    if (!node) return "";
+    const mode = this._config?.transfer_metric_mode ?? "aggregate";
+    const clients = Array.isArray(node.clients) ? node.clients : [];
+
+    let txKbps = 0;
+    let rxKbps = 0;
+    let labelPrefix = "";
+
+    if (mode === "uplink") {
+      txKbps = node.parent_cur_tx_kbps || 0;
+      rxKbps = node.parent_cur_rx_kbps || 0;
+      labelPrefix = "Uplink ";
+    } else if (mode === "max_single") {
+      txKbps = clients.reduce((m, c) => Math.max(m, c?.cur_tx_kbps || 0), 0);
+      rxKbps = clients.reduce((m, c) => Math.max(m, c?.cur_rx_kbps || 0), 0);
+      labelPrefix = "Max ";
+    } else if (mode === "average") {
+      const count = clients.length || 0;
+      if (count > 0) {
+        txKbps = Math.round(
+          clients.reduce((s, c) => s + Math.max(0, c?.cur_tx_kbps || 0), 0) / count
+        );
+        rxKbps = Math.round(
+          clients.reduce((s, c) => s + Math.max(0, c?.cur_rx_kbps || 0), 0) / count
+        );
+      }
+      labelPrefix = "Avg ";
+    } else {
+      txKbps = node.clients_cur_tx_kbps_total || node.parent_cur_tx_kbps || 0;
+      rxKbps = node.clients_cur_rx_kbps_total || node.parent_cur_rx_kbps || 0;
+      labelPrefix = "Agg ";
+    }
+
+    const tx = fmtSpeed(txKbps);
+    const rx = fmtSpeed(rxKbps);
+    if (!tx && !rx) return "";
+    if (tx && rx) return `${labelPrefix}TX ${tx} / RX ${rx}`;
+    return tx ? `${labelPrefix}TX ${tx}` : `${labelPrefix}RX ${rx}`;
+  }
+
   _sortSlaveNodes(nodes) {
     const mode = this._config?.node_sort ?? "default";
     if (mode === "default") return nodes;
@@ -950,6 +1007,7 @@ class FritzMeshCardEditor extends HTMLElement {
     const currentUrlTemplate = this._config.url_template ?? "http://{ip}";
     const currentNameInfoDisplay = this._config.name_info_display ?? "mesh_node";
     const currentNodeSort = this._config.node_sort ?? "default";
+    const currentTransferMetricMode = this._config.transfer_metric_mode ?? "aggregate";
     const currentLineColor = sanitizeHexColor(this._config.line_color, "#4caf50");
     const currentAccentColor = sanitizeHexColor(this._config.accent_color, "#1976d2");
     const currentTextDimColor = sanitizeHexColor(this._config.text_dim_color, "#888888");
@@ -1044,6 +1102,17 @@ class FritzMeshCardEditor extends HTMLElement {
         </div>
 
         <div>
+          <label for="transfer-metric-mode">Transfer metric mode</label>
+          <select id="transfer-metric-mode">
+            <option value="aggregate" ${currentTransferMetricMode === "aggregate" ? "selected" : ""}>Aggregate</option>
+            <option value="uplink" ${currentTransferMetricMode === "uplink" ? "selected" : ""}>Uplink only</option>
+            <option value="max_single" ${currentTransferMetricMode === "max_single" ? "selected" : ""}>Max single client</option>
+            <option value="average" ${currentTransferMetricMode === "average" ? "selected" : ""}>Average client</option>
+          </select>
+          <div class="hint">Controls TX/RX metric shown on master and repeater cards.</div>
+        </div>
+
+        <div>
           <label for="url-template">URL template (for IP clicks)</label>
           <input
             id="url-template"
@@ -1091,6 +1160,7 @@ class FritzMeshCardEditor extends HTMLElement {
     const titleInput = this.shadowRoot.querySelector("#title-input");
     const nameInfoDisplayInput = this.shadowRoot.querySelector("#name-info-display");
     const nodeSortInput = this.shadowRoot.querySelector("#node-sort");
+    const transferMetricModeInput = this.shadowRoot.querySelector("#transfer-metric-mode");
     const urlTemplateInput = this.shadowRoot.querySelector("#url-template");
     const lineColorInput = this.shadowRoot.querySelector("#line-color");
     const accentColorInput = this.shadowRoot.querySelector("#accent-color");
@@ -1132,6 +1202,12 @@ class FritzMeshCardEditor extends HTMLElement {
     nodeSortInput?.addEventListener("change", (e) => {
       const val = e.target.value;
       const cfg = { ...this._config, node_sort: val };
+      this._dispatch(cfg);
+    });
+
+    transferMetricModeInput?.addEventListener("change", (e) => {
+      const val = e.target.value;
+      const cfg = { ...this._config, transfer_metric_mode: val };
       this._dispatch(cfg);
     });
 
@@ -1314,6 +1390,15 @@ ha-card {
 .mp-model { font-size: .72em; opacity: .82; margin-top: 1px; }
 .mp-ip    { font-size: .72em; font-family: monospace; opacity: .9; }
 .mp-fw    { font-size: .66em; opacity: .65; }
+.mp-rate {
+  margin-top: 4px;
+  font-size: .66em;
+  opacity: .92;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mp-rate svg { width: 12px; height: 12px; }
 /* "HEIMNETZ" badge (German for "home network") – AVM branding convention. */
 .mp-badge {
   margin-top: 8px;
@@ -1475,6 +1560,15 @@ ha-card {
 .sc-info  { min-width: 0; }  /* allow text to shrink and truncate */
 .sc-name  { font-weight: 700; font-size: .88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-model { font-size: .7em; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.sc-rate {
+  margin-top: 2px;
+  font-size: .66em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sc-rate svg { width: 12px; height: 12px; }
 .sc-badge {
   display: inline-block;
   margin-top: 4px;

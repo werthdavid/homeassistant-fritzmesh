@@ -14,8 +14,9 @@ I have no business relationship with AVM, and this software is provided for info
 ## Features
 
 - **Native HA entities** — sensors and binary sensors appear directly in HA, no YAML, no MQTT
-- **Per mesh node** — Connected Devices, WiFi Devices, LAN Devices count sensors
+- **Per mesh node** — Connected/WiFi/LAN count sensors plus current RX/TX rate sensors
 - **Per client device** — connectivity binary sensor, Mesh Node sensor, Connection type sensor
+- **Custom Lovelace card with visual editor** — configure sorting, click behavior target, transfer metric mode, colors, and font scaling in UI
 - **Dynamic discovery** — new devices appearing on the network are added without restarting HA
 - **Config flow UI** — set up via Settings → Integrations, no files to edit
 - **Auto-refresh** — polls the FRITZ!Box every N seconds (configurable, default 60 s)
@@ -72,6 +73,20 @@ type: custom:fritzmesh-card
 entity: sensor.fritz_box_mesh_192_168_178_1_topology
 ```
 
+### Visual editor options
+
+The card supports full UI configuration in Lovelace Visual Editor:
+
+| Option | Values | Description |
+|---|---|---|
+| Name detail display | `Connected mesh node`, `Connection state` | Defines which entity is shown in **More Info** when clicking a device name |
+| Node sorting | `Default`, `By name`, `By IP`, `By MAC` | Sort order for repeater sections and client lists |
+| Transfer metric mode | `Aggregate`, `Uplink only`, `Max single client`, `Average client` | Metric shown as TX/RX label on master and repeater cards |
+| URL template | e.g. `http://{ip}`, `https://{ip}` | Used when clicking IP addresses (IPs are always clickable) |
+| Line / Accent / Text colors | color pickers | Card appearance customization |
+| Master panel gradient start/end | color pickers | Color customization for the blue mesh-master panel |
+| Font size scale | `80`–`140` | Scales card text size in percent |
+
 
 ## Entities created
 
@@ -82,6 +97,8 @@ entity: sensor.fritz_box_mesh_192_168_178_1_topology
 | `{node} Connected Devices` | sensor | `5` |
 | `{node} WiFi Devices` | sensor | `3` |
 | `{node} LAN Devices` | sensor | `2` |
+| `{node} Current RX Rate` | sensor | `1733000` (`kbit/s`) |
+| `{node} Current TX Rate` | sensor | `1201000` (`kbit/s`) |
 
 **Per client device** (device = laptop, phone, etc., identified by MAC):
 

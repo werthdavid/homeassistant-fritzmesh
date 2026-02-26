@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
@@ -110,6 +110,20 @@ async def async_setup_entry(
                             sensor_key="lan_devices",
                             sensor_name="LAN Devices",
                             icon="mdi:ethernet",
+                        ),
+                        MeshNodeRateSensor(
+                            coordinator, entry, node,
+                            sensor_key="current_rx_rate",
+                            sensor_name="Current RX Rate",
+                            icon="mdi:download-network",
+                            direction="rx",
+                        ),
+                        MeshNodeRateSensor(
+                            coordinator, entry, node,
+                            sensor_key="current_tx_rate",
+                            sensor_name="Current TX Rate",
+                            icon="mdi:upload-network",
+                            direction="tx",
                         ),
                     ]
                 )
@@ -220,6 +234,48 @@ class MeshNodeCountSensor(CoordinatorEntity[FritzMeshCoordinator], SensorEntity)
             return sum(1 for c in node.clients if c.connection_type == "LAN")
 
         return None  # unreachable, but keeps the type checker happy
+
+
+class MeshNodeRateSensor(CoordinatorEntity[FritzMeshCoordinator], SensorEntity):
+    """Reports aggregate current transfer rate for a mesh node (kbit/s)."""
+
+    has_entity_name = True
+    state_class = SensorStateClass.MEASUREMENT
+    device_class = SensorDeviceClass.DATA_RATE
+    native_unit_of_measurement = "kbit/s"
+
+    def __init__(
+        self,
+        coordinator: FritzMeshCoordinator,
+        entry: ConfigEntry,
+        node: MeshNode,
+        sensor_key: str,
+        sensor_name: str,
+        icon: str,
+        direction: str,  # "rx" or "tx"
+    ) -> None:
+        super().__init__(coordinator)
+        self._node_mac = node.mac
+        self._direction = direction
+        self._attr_name = sensor_name
+        self._attr_icon = icon
+        self._attr_unique_id = f"{entry.entry_id}_{node.mac}_{sensor_key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, node.mac)},
+            name=node.name,
+            model=node.model,
+            manufacturer=node.vendor,
+            sw_version=node.firmware,
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        node = self.coordinator.data.mesh_nodes_by_mac.get(self._node_mac)
+        if node is None:
+            return None
+        if self._direction == "rx":
+            return sum(max(0, c.cur_rx_kbps) for c in node.clients)
+        return sum(max(0, c.cur_tx_kbps) for c in node.clients)
 
 
 # ── Client sensors – base class ───────────────────────────────────────────────
@@ -466,6 +522,12 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                     "vendor":           node.vendor,
                     "firmware":         node.firmware,
                     "parent_link_type": node.parent_link_type,  # "WLAN"/"LAN" for slaves
+                    "parent_cur_rx_kbps": node.parent_cur_rx_kbps,
+                    "parent_cur_tx_kbps": node.parent_cur_tx_kbps,
+                    "parent_max_rx_kbps": node.parent_max_rx_kbps,
+                    "parent_max_tx_kbps": node.parent_max_tx_kbps,
+                    "clients_cur_rx_kbps_total": sum(max(0, c.cur_rx_kbps) for c in node.clients),
+                    "clients_cur_tx_kbps_total": sum(max(0, c.cur_tx_kbps) for c in node.clients),
                     "clients":          clients,
                 }
             )

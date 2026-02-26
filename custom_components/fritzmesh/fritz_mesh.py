@@ -150,6 +150,10 @@ class MeshNode:
     parent_link_type: str = ""
     parent_link_state: str = ""
     parent_interface_name: str = ""
+    parent_cur_rx_kbps: int = 0
+    parent_cur_tx_kbps: int = 0
+    parent_max_rx_kbps: int = 0
+    parent_max_tx_kbps: int = 0
 
 
 @dataclass
@@ -378,19 +382,25 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
                         # n1 (master) is the parent of n2 (slave).
                         # Only record the first (most authoritative) link found.
                         if n2 not in mesh_node_parent:
-                            mesh_node_parent[n2] = (n1, iface_type, state, iface_name)
+                            mesh_node_parent[n2] = (
+                                n1, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
+                            )
 
                     elif n1_role == "slave" and n2_role == "master":
                         # n2 (master) is the parent of n1 (slave).
                         if n1 not in mesh_node_parent:
-                            mesh_node_parent[n1] = (n2, iface_type, state, iface_name)
+                            mesh_node_parent[n1] = (
+                                n2, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
+                            )
 
                     elif n1_role == "slave" and n2_role == "slave":
                         # Daisy-chained slaves: we don't know the depth order
                         # definitively, so we use a simple heuristic: the node
                         # appearing as n1 is treated as upstream of n2.
                         if n2 not in mesh_node_parent:
-                            mesh_node_parent[n2] = (n1, iface_type, state, iface_name)
+                            mesh_node_parent[n2] = (
+                                n1, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
+                            )
 
     # ── Assign accumulated data back to MeshNode objects ────────────────────
 
@@ -400,12 +410,25 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
             mesh_nodes_by_uid[uid].clients = clients
 
     # Attach parent-relationship info to slave nodes.
-    for uid, (parent_uid, link_type, link_state, iface_name) in mesh_node_parent.items():
+    for uid, (
+        parent_uid,
+        link_type,
+        link_state,
+        iface_name,
+        cur_rx,
+        cur_tx,
+        max_rx,
+        max_tx,
+    ) in mesh_node_parent.items():
         if uid in mesh_nodes_by_uid:
             mesh_nodes_by_uid[uid].parent_uid            = parent_uid
             mesh_nodes_by_uid[uid].parent_link_type      = link_type
             mesh_nodes_by_uid[uid].parent_link_state     = link_state
             mesh_nodes_by_uid[uid].parent_interface_name = iface_name
+            mesh_nodes_by_uid[uid].parent_cur_rx_kbps    = cur_rx
+            mesh_nodes_by_uid[uid].parent_cur_tx_kbps    = cur_tx
+            mesh_nodes_by_uid[uid].parent_max_rx_kbps    = max_rx
+            mesh_nodes_by_uid[uid].parent_max_tx_kbps    = max_tx
 
     # ── Pass 4: Collect unassigned clients ───────────────────────────────────
     # Build a set of all client UIDs that were successfully assigned to a

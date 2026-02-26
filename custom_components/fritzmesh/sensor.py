@@ -32,6 +32,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, CONF_HOST
@@ -389,6 +390,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
         """
         super().__init__(coordinator)
         self._host: str = entry.data.get(CONF_HOST, "")
+        self._entry_id: str = entry.entry_id
         self._attr_name      = "Topology"
         self._attr_unique_id = f"{entry.entry_id}_topology"
 
@@ -423,6 +425,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
             list, dict, None) so they survive the HA state machine serialisation.
         """
         data = self.coordinator.data
+        client_entity_ids = self._client_entity_id_map()
 
         # Order: master first (sort key 0), then slaves alphabetically.
         # This ordering is what the Lovelace card expects; the first node
@@ -447,6 +450,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                     "cur_tx_kbps":      c.cur_tx_kbps,       # current transmit speed
                     "max_rx_kbps":      c.max_rx_kbps,       # max (negotiated) receive speed
                     "max_tx_kbps":      c.max_tx_kbps,       # max (negotiated) transmit speed
+                    "ha_entity_id":     client_entity_ids.get(c.mac.upper()),
                 }
                 for c in node.clients
             ]
@@ -477,6 +481,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                 "cur_tx_kbps":      client.cur_tx_kbps,
                 "max_rx_kbps":      client.max_rx_kbps,
                 "max_tx_kbps":      client.max_tx_kbps,
+                "ha_entity_id":     client_entity_ids.get(client.mac.upper()),
             }
             # Iterate over clients_by_mac to find the ones with mesh_node=None.
             for client, mesh_node in data.clients_by_mac.values()
@@ -488,3 +493,22 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
             "mesh_nodes":         mesh_nodes,
             "unassigned_clients": unassigned,
         }
+
+    def _client_entity_id_map(self) -> dict[str, str]:
+        """Map client MAC addresses to their mesh-node sensor entity IDs."""
+        if self.hass is None:
+            return {}
+
+        registry = er.async_get(self.hass)
+        entries = er.async_entries_for_config_entry(registry, self._entry_id)
+        prefix = f"{self._entry_id}_"
+        suffix = "_mesh_node"
+
+        mapping: dict[str, str] = {}
+        for entity in entries:
+            unique_id = entity.unique_id or ""
+            if not unique_id.startswith(prefix) or not unique_id.endswith(suffix):
+                continue
+            mac = unique_id[len(prefix):-len(suffix)].upper()
+            mapping[mac] = entity.entity_id
+        return mapping

@@ -1691,14 +1691,29 @@ ha-card {
 
 /* Nested repeater branches (slave-of-slave) */
 .children {
+  position: relative;
   margin-left: 10px;
-  padding-left: 18px;
   border-left: 2px solid var(--green);
+}
+.children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -32px;
+  width: 32px;
+  height: 2px;
+  background: var(--green);
 }
 :host([data-size="compact"]) .children {
   margin-left: 0;
   padding-left: 10px;
   border-left: 1px solid var(--green-fade);
+}
+:host([data-size="compact"]) .children::before {
+  left: -10px;
+  width: 10px;
+  height: 1px;
+  background: var(--green-fade);
 }
 
 /* ── Individual client row ── */

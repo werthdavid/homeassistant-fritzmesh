@@ -37,7 +37,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.9.4";
+const CARD_VERSION = "1.9.5";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -1692,15 +1692,16 @@ ha-card {
 /* Nested repeater branches (slave-of-slave) */
 .children {
   position: relative;
-  margin-left: 10px;
+  margin-left: 24px;
+  margin-top: 14px;
   border-left: 2px solid var(--green);
 }
 .children::before {
   content: "";
   position: absolute;
   top: 0;
-  left: -32px;
-  width: 32px;
+  left: -48px;
+  width: 48px;
   height: 2px;
   background: var(--green);
 }

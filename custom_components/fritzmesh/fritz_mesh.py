@@ -240,6 +240,13 @@ def _extract_primary_ipv4(ip_addresses: list[dict] | None) -> Optional[str]:
     return None
 
 
+def _is_network_switch(entry: dict) -> bool:
+    """Return True if a topology entry represents a (managed/unmanaged) switch."""
+    device_class = str(entry.get("device_class", "")).upper()
+    model = str(entry.get("model", "")).strip().lower()
+    return device_class == "NETWORK_SWITCH" or model == "switch"
+
+
 # ── Main parser ───────────────────────────────────────────────────────────────
 
 def parse_mesh_topology(raw: dict) -> MeshTopology:
@@ -289,6 +296,7 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
             "name": node.get("device_name", uid),
             "mac": node.get("device_mac_address", ""),
             "ip": _extract_primary_ipv4(node.get("ip_addresses")),
+            "device_class": node.get("device_class", ""),
             "model": node.get("device_model", ""),
             "vendor": node.get("device_manufacturer", ""),
             "firmware": node.get("device_firmware_version", ""),
@@ -304,20 +312,24 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
     mesh_node_clients: dict[str, list[ClientDevice]] = {}
     mesh_node_parent:  dict[str, tuple] = {}
 
-    # ── Pass 2: Create MeshNode stubs for is_meshed nodes ───────────────────
+    # ── Pass 2: Create MeshNode stubs for is_meshed nodes (+ network switches) ──
     mesh_nodes_by_uid: dict[str, MeshNode] = {}
     for uid, entry in all_nodes_by_uid.items():
-        if entry["is_meshed"]:
+        if entry["is_meshed"] or _is_network_switch(entry):
+            role = entry["mesh_role"] if entry["is_meshed"] else "switch"
+            display_name = entry["name"] or (
+                f"Switch {entry['mac']}" if entry["mac"] else f"Switch {uid}"
+            )
             mesh_node = MeshNode(
                 uid=uid,
-                name=entry["name"],
+                name=display_name,
                 mac=entry["mac"],
                 ip=entry["ip"],
-                role=entry["mesh_role"],
+                role=role,
                 model=entry["model"],
                 vendor=entry["vendor"],
                 firmware=entry["firmware"],
-                is_meshed=True,
+                is_meshed=entry["is_meshed"],
                 # clients and parent info filled in pass 3
             )
             mesh_nodes_by_uid[uid] = mesh_node
@@ -412,6 +424,92 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
                                 mesh_node_parent[n2] = (
                                     n1, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
                                 )
+
+    # ── Pass 3b: Reconcile switch-linked topology (non-mesh intermediates) ──
+    switch_uids = {uid for uid, entry in all_nodes_by_uid.items() if _is_network_switch(entry)}
+
+    # Capture direct switch links from the switch's own interfaces so we keep
+    # the correct media/type context for downstream devices.
+    for switch_uid in switch_uids:
+        switch_raw = all_nodes_by_uid[switch_uid]["_raw"]
+        linked_mesh_candidates: list[tuple[str, str, str, str, int, int, int, int]] = []
+        seen_other: set[str] = set()
+
+        for iface in switch_raw.get("node_interfaces", []):
+            iface_type = iface.get("type", "")
+            iface_name = iface.get("name", "")
+            for link in iface.get("node_links", []):
+                n1 = link.get("node_1_uid", "")
+                n2 = link.get("node_2_uid", "")
+                if n1 == switch_uid:
+                    other_uid = n2
+                elif n2 == switch_uid:
+                    other_uid = n1
+                else:
+                    continue
+
+                if not other_uid or other_uid in seen_other:
+                    continue
+                seen_other.add(other_uid)
+
+                state = link.get("state", "DISCONNECTED")
+                cur_rx = link.get("cur_data_rate_rx", 0)
+                cur_tx = link.get("cur_data_rate_tx", 0)
+                max_rx = link.get("max_data_rate_rx", 0)
+                max_tx = link.get("max_data_rate_tx", 0)
+                other_entry = all_nodes_by_uid.get(other_uid)
+                if not other_entry:
+                    continue
+
+                if other_uid in mesh_nodes_by_uid:
+                    linked_mesh_candidates.append(
+                        (other_uid, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx)
+                    )
+
+                    # If a slave node is physically connected to a switch, model
+                    # the switch as its parent in the rendered tree.
+                    if other_entry["is_meshed"] and other_entry["mesh_role"] == "slave":
+                        mesh_node_parent[other_uid] = (
+                            switch_uid, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
+                        )
+                    continue
+
+                # Attach any non-mesh/non-switch endpoint as client of the switch.
+                if not other_entry["is_meshed"] and other_uid not in switch_uids:
+                    mesh_node_clients[switch_uid].append(
+                        ClientDevice(
+                            uid=other_uid,
+                            name=other_entry["name"],
+                            mac=other_entry["mac"],
+                            connection_type=iface_type,
+                            connection_state=state,
+                            cur_rx_kbps=cur_rx,
+                            cur_tx_kbps=cur_tx,
+                            max_rx_kbps=max_rx,
+                            max_tx_kbps=max_tx,
+                            interface_name=iface_name,
+                        )
+                    )
+
+        # Parent the switch itself to the most plausible upstream node.
+        # Preference: master mesh node, then any other mesh node, then existing.
+        if switch_uid not in mesh_node_parent and linked_mesh_candidates:
+            preferred = next(
+                (c for c in linked_mesh_candidates if all_nodes_by_uid[c[0]].get("mesh_role") == "master"),
+                None,
+            )
+            if preferred is None:
+                preferred = next(
+                    (c for c in linked_mesh_candidates if all_nodes_by_uid[c[0]].get("is_meshed")),
+                    linked_mesh_candidates[0],
+                )
+            mesh_node_parent[switch_uid] = preferred
+
+    # Remove switches from mesh client lists; switches are rendered as nodes.
+    for node_uid, clients in mesh_node_clients.items():
+        if node_uid in switch_uids:
+            continue
+        mesh_node_clients[node_uid] = [c for c in clients if c.uid not in switch_uids]
 
     # ── Assign accumulated data back to MeshNode objects ────────────────────
 

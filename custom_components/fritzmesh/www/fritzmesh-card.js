@@ -37,7 +37,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.9.7";
+const CARD_VERSION = "1.9.8";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -601,6 +601,7 @@ class FritzMeshCard extends HTMLElement {
             <div class="sc-info">
               <div class="sc-name">${esc(node.name)}</div>
               ${node.model ? `<div class="sc-model">${esc(node.model)}</div>` : ""}
+              ${node.firmware ? `<div class="sc-model">FW ${esc(node.firmware)}</div>` : ""}
               ${nodeRates ? `<div class="sc-rate">${ICON.transfer}<span>${esc(nodeRates)}</span></div>` : ""}
               <div class="sc-badge">${nodeBadge}</div>
             </div>

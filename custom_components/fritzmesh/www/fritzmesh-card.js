@@ -37,7 +37,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.9.5";
+const CARD_VERSION = "1.9.7";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -581,7 +581,11 @@ class FritzMeshCard extends HTMLElement {
     const nodeRates = this._nodeRateLabel(node);
     // parent_link_type is "WLAN" or "LAN"; default to "LAN" if missing.
     const linkType = node.parent_link_type || "LAN";
-    const isWifi   = linkType === "WLAN";
+    const role = String(node?.role || "").toLowerCase();
+    const isSwitch = role === "switch";
+    const isWifi   = !isSwitch && linkType === "WLAN";
+    const nodeBadge = isSwitch ? "SWITCH" : (isWifi ? "WIFI REPEATER" : "REPEATER");
+    const nodeIcon = isSwitch ? ICON.lan : ICON.ap;
 
     return `
       <div class="section">
@@ -593,12 +597,12 @@ class FritzMeshCard extends HTMLElement {
           <!-- Slave device card -->
           <div class="slave-card">
             <!-- Icon colour: blue for LAN-connected repeater, green for WiFi-connected -->
-            <div class="sc-icon ${isWifi ? "sc-wifi" : "sc-lan"}">${ICON.ap}</div>
+            <div class="sc-icon ${isWifi ? "sc-wifi" : "sc-lan"}">${nodeIcon}</div>
             <div class="sc-info">
               <div class="sc-name">${esc(node.name)}</div>
               ${node.model ? `<div class="sc-model">${esc(node.model)}</div>` : ""}
               ${nodeRates ? `<div class="sc-rate">${ICON.transfer}<span>${esc(nodeRates)}</span></div>` : ""}
-              <div class="sc-badge">${isWifi ? "WIFI REPEATER" : "REPEATER"}</div>
+              <div class="sc-badge">${nodeBadge}</div>
             </div>
           </div>
         </div>

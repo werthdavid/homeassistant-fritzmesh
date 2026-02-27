@@ -60,7 +60,9 @@ links to reconstruct who is connected to whom.
 """
 
 import logging
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from fritzconnection.lib.fritzhosts import FritzHosts
@@ -463,6 +465,24 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
         unassigned_clients=unassigned,
         raw=raw,
     )
+
+
+def load_mesh_topology_from_json_file(path: str, config_dir: str | None = None) -> MeshTopology:
+    """Load a mesh topology JSON file and parse it to MeshTopology.
+
+    If `path` is relative and `config_dir` is provided, the file is resolved
+    against that directory (Home Assistant config dir).
+    """
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute() and config_dir:
+        candidate = Path(config_dir) / candidate
+    candidate = candidate.resolve()
+
+    raw_text = candidate.read_text(encoding="utf-8")
+    raw = json.loads(raw_text)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Debug topology JSON must be an object, got {type(raw).__name__}")
+    return parse_mesh_topology(raw)
 
 
 # ── Host-list enrichment ──────────────────────────────────────────────────────

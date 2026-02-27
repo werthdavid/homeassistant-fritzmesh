@@ -11,13 +11,16 @@
           "password": "Password",
           "use_tls": "Use TLS (HTTPS)",
           "poll_interval": "Poll interval (seconds)",
-          "debug_mode": "Debug raw JSON output"
+          "debug_mode": "Debug raw JSON output",
+          "debug_use_json": "Use debug JSON as topology source",
+          "debug_json_path": "Debug JSON file path"
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to FRITZ!Box. Check host, port and TLS setting.",
       "invalid_auth": "Invalid username or password.",
+      "invalid_debug_json": "Debug JSON is invalid or file path is not readable.",
       "unknown": "Unexpected error — check the Home Assistant logs."
     },
     "abort": {
@@ -31,7 +34,9 @@
         "description": "Adjust polling and debug output.",
         "data": {
           "poll_interval": "Poll interval (seconds)",
-          "debug_mode": "Debug raw JSON output"
+          "debug_mode": "Debug raw JSON output",
+          "debug_use_json": "Use debug JSON as topology source",
+          "debug_json_path": "Debug JSON file path"
         }
       }
     }

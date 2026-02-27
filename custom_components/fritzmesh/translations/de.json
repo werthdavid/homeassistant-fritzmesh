@@ -11,13 +11,16 @@
           "password": "Passwort",
           "use_tls": "TLS verwenden (HTTPS)",
           "poll_interval": "Abfrageintervall (Sekunden)",
-          "debug_mode": "Debug-Roh-JSON-Ausgabe"
+          "debug_mode": "Debug-Roh-JSON-Ausgabe",
+          "debug_use_json": "Debug-JSON als Topologiequelle verwenden",
+          "debug_json_path": "Debug-JSON-Dateipfad"
         }
       }
     },
     "error": {
       "cannot_connect": "Verbindung zur FRITZ!Box fehlgeschlagen. Überprüfen Sie Host, Port und TLS-Einstellung.",
       "invalid_auth": "Ungültiger Benutzername oder falsches Passwort.",
+      "invalid_debug_json": "Debug-JSON ist ungültig oder der Dateipfad ist nicht lesbar.",
       "unknown": "Unerwarteter Fehler – überprüfen Sie die Home Assistant-Protokolle."
     },
     "abort": {
@@ -31,7 +34,9 @@
         "description": "Abfrage und Debug-Ausgabe anpassen.",
         "data": {
           "poll_interval": "Abfrageintervall (Sekunden)",
-          "debug_mode": "Debug-Roh-JSON-Ausgabe"
+          "debug_mode": "Debug-Roh-JSON-Ausgabe",
+          "debug_use_json": "Debug-JSON als Topologiequelle verwenden",
+          "debug_json_path": "Debug-JSON-Dateipfad"
         }
       }
     }

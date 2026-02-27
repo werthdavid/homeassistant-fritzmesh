@@ -35,14 +35,18 @@ from .const import (
     CONF_USE_TLS,
     CONF_POLL_INTERVAL,
     CONF_DEBUG_MODE,
+    CONF_DEBUG_USE_JSON,
+    CONF_DEBUG_JSON_PATH,
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_USE_TLS,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_DEBUG_MODE,
+    DEFAULT_DEBUG_USE_JSON,
+    DEFAULT_DEBUG_JSON_PATH,
     DEBUG_MODE_CHOICES,
 )
-from .fritz_mesh import FritzMeshFetcher
+from .fritz_mesh import FritzMeshFetcher, load_mesh_topology_from_json_file
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +69,8 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): bool,
         vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): int,
         vol.Required(CONF_DEBUG_MODE, default=DEFAULT_DEBUG_MODE): vol.In(DEBUG_MODE_CHOICES),
+        vol.Required(CONF_DEBUG_USE_JSON, default=DEFAULT_DEBUG_USE_JSON): bool,
+        vol.Optional(CONF_DEBUG_JSON_PATH, default=DEFAULT_DEBUG_JSON_PATH): str,
     }
 )
 
@@ -78,10 +84,20 @@ def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schem
         CONF_DEBUG_MODE,
         config_entry.data.get(CONF_DEBUG_MODE, DEFAULT_DEBUG_MODE),
     )
+    current_debug_use_json = config_entry.options.get(
+        CONF_DEBUG_USE_JSON,
+        config_entry.data.get(CONF_DEBUG_USE_JSON, DEFAULT_DEBUG_USE_JSON),
+    )
+    current_debug_json_path = config_entry.options.get(
+        CONF_DEBUG_JSON_PATH,
+        config_entry.data.get(CONF_DEBUG_JSON_PATH, DEFAULT_DEBUG_JSON_PATH),
+    )
     return vol.Schema(
         {
             vol.Required(CONF_POLL_INTERVAL, default=current_poll): int,
             vol.Required(CONF_DEBUG_MODE, default=current_debug): vol.In(DEBUG_MODE_CHOICES),
+            vol.Required(CONF_DEBUG_USE_JSON, default=current_debug_use_json): bool,
+            vol.Optional(CONF_DEBUG_JSON_PATH, default=current_debug_json_path): str,
         }
     )
 
@@ -102,6 +118,17 @@ async def _validate_input(hass: HomeAssistant, data: dict) -> None:
         Exception: Any exception raised by FritzMeshFetcher.fetch() propagates
                    up; the caller distinguishes auth errors from network errors.
     """
+    if data.get(CONF_DEBUG_USE_JSON, False):
+        debug_json_path = str(data.get(CONF_DEBUG_JSON_PATH, "")).strip()
+        if not debug_json_path:
+            raise ValueError("debug_json_path is required when debug_use_json is enabled")
+        await hass.async_add_executor_job(
+            load_mesh_topology_from_json_file,
+            debug_json_path,
+            hass.config.path(),
+        )
+        return
+
     fetcher = FritzMeshFetcher(
         address=data[CONF_HOST],
         port=data[CONF_PORT],
@@ -168,9 +195,11 @@ class FritzMeshConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception as err:
                 _LOGGER.exception("Validation error: %s", err)
                 err_str = str(err).lower()
+                if any(kw in err_str for kw in ("debug_json_path", "json", "no such file", "is a directory")):
+                    errors["base"] = "invalid_debug_json"
                 # Heuristic: if the error message contains auth-related words
                 # or HTTP 401/403 codes, treat it as an authentication failure.
-                if any(kw in err_str for kw in ("auth", "password", "401", "403")):
+                elif any(kw in err_str for kw in ("auth", "password", "401", "403")):
                     errors["base"] = "invalid_auth"
                 else:
                     errors["base"] = "cannot_connect"
@@ -201,10 +230,28 @@ class FritzMeshOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict | None = None) -> FlowResult:
         """Manage options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            if user_input.get(CONF_DEBUG_USE_JSON, False):
+                debug_json_path = str(user_input.get(CONF_DEBUG_JSON_PATH, "")).strip()
+                if not debug_json_path:
+                    errors["base"] = "invalid_debug_json"
+                else:
+                    try:
+                        await self.hass.async_add_executor_job(
+                            load_mesh_topology_from_json_file,
+                            debug_json_path,
+                            self.hass.config.path(),
+                        )
+                    except Exception as err:
+                        _LOGGER.exception("Options validation error: %s", err)
+                        errors["base"] = "invalid_debug_json"
+
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="init",
             data_schema=_build_options_schema(self._config_entry),
+            errors=errors,
         )

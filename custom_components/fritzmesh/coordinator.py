@@ -49,7 +49,13 @@ from .const import (
     DEBUG_MODE_LOG,
     DEBUG_MODE_LOG_AND_FILE,
 )
-from .fritz_mesh import FritzMeshFetcher, MeshNode, ClientDevice, MeshTopology
+from .fritz_mesh import (
+    FritzMeshFetcher,
+    MeshNode,
+    ClientDevice,
+    MeshTopology,
+    load_mesh_topology_from_json_file,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +114,8 @@ class FritzMeshCoordinator(DataUpdateCoordinator[FritzMeshData]):
         use_tls: bool,
         poll_interval: int,
         debug_mode: str,
+        debug_use_json: bool,
+        debug_json_path: str,
     ) -> None:
         """Initialise the coordinator.
 
@@ -136,6 +144,8 @@ class FritzMeshCoordinator(DataUpdateCoordinator[FritzMeshData]):
         self._password = password
         self._use_tls  = use_tls
         self._debug_mode = debug_mode
+        self._debug_use_json = debug_use_json
+        self._debug_json_path = debug_json_path
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -153,14 +163,24 @@ class FritzMeshCoordinator(DataUpdateCoordinator[FritzMeshData]):
             Any exception raised by FritzMeshFetcher.fetch() (network errors,
             auth failures, SOAP parsing errors, …).
         """
-        fetcher = FritzMeshFetcher(
-            address=self._host,
-            port=self._port,
-            user=self._username,
-            password=self._password,
-            use_tls=self._use_tls,
-        )
-        topology = fetcher.fetch()
+        if self._debug_use_json:
+            debug_json_path = str(self._debug_json_path or "").strip()
+            if not debug_json_path:
+                raise ValueError("debug_json_path is required when debug_use_json is enabled")
+            topology = load_mesh_topology_from_json_file(debug_json_path, self.hass.config.path())
+            _LOGGER.info(
+                "FRITZ!Mesh loaded topology from debug JSON file: %s",
+                debug_json_path,
+            )
+        else:
+            fetcher = FritzMeshFetcher(
+                address=self._host,
+                port=self._port,
+                user=self._username,
+                password=self._password,
+                use_tls=self._use_tls,
+            )
+            topology = fetcher.fetch()
         self._handle_debug_dump(topology)
         return topology
 

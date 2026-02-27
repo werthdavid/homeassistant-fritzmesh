@@ -40,8 +40,12 @@ from .const import (
     CONF_USE_TLS,
     CONF_POLL_INTERVAL,
     CONF_DEBUG_MODE,
+    CONF_DEBUG_USE_JSON,
+    CONF_DEBUG_JSON_PATH,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_DEBUG_MODE,
+    DEFAULT_DEBUG_USE_JSON,
+    DEFAULT_DEBUG_JSON_PATH,
 )
 from .coordinator import FritzMeshCoordinator
 
@@ -205,6 +209,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         debug_mode=entry.options.get(
             CONF_DEBUG_MODE,
             entry.data.get(CONF_DEBUG_MODE, DEFAULT_DEBUG_MODE),
+        ),
+        debug_use_json=entry.options.get(
+            CONF_DEBUG_USE_JSON,
+            entry.data.get(CONF_DEBUG_USE_JSON, DEFAULT_DEBUG_USE_JSON),
+        ),
+        debug_json_path=entry.options.get(
+            CONF_DEBUG_JSON_PATH,
+            entry.data.get(CONF_DEBUG_JSON_PATH, DEFAULT_DEBUG_JSON_PATH),
         ),
     )
 

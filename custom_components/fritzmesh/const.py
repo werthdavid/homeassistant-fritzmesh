@@ -21,6 +21,8 @@ CONF_PASSWORD = "password"      # Fritz!Box web-UI password
 CONF_USE_TLS  = "use_tls"       # Whether to use HTTPS for the TR-064 connection
 CONF_POLL_INTERVAL = "poll_interval"  # How often (seconds) to refresh topology
 CONF_DEBUG_MODE = "debug_mode"  # How to expose raw mesh JSON for troubleshooting
+CONF_DEBUG_USE_JSON = "debug_use_json"  # Use local debug JSON file instead of TR-064
+CONF_DEBUG_JSON_PATH = "debug_json_path"  # Path to debug mesh JSON file
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 # Sensible defaults shown in the config-flow form.  192.168.178.1 is the
@@ -32,6 +34,8 @@ DEFAULT_PORT          = 49000   # Plain HTTP TR-064 port
 DEFAULT_USE_TLS       = False   # Most home setups don't enable TLS on TR-064
 DEFAULT_POLL_INTERVAL = 60      # Refresh every 60 seconds (1 minute)
 DEFAULT_DEBUG_MODE    = "off"
+DEFAULT_DEBUG_USE_JSON = False
+DEFAULT_DEBUG_JSON_PATH = ""
 
 DEBUG_MODE_OFF = "off"
 DEBUG_MODE_LOG = "log"

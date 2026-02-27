@@ -37,7 +37,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.9.2";
+const CARD_VERSION = "1.9.3";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -493,6 +493,7 @@ class FritzMeshCard extends HTMLElement {
     if (this._config.hide_offline_nodes) {
       slaves = slaves.filter((node) => this._isNodeOnline(node));
     }
+    const slaveTree = this._buildSlaveTree(master, slaves);
 
     // Build the two-column layout:
     //   Left  → sticky master panel (blue gradient card with router icon)
@@ -502,7 +503,7 @@ class FritzMeshCard extends HTMLElement {
         ${this._masterPanel(master, host)}
         <div class="tree">
           ${this._masterSection(master)}
-          ${slaves.map((s) => this._slaveSection(s)).join("")}
+          ${slaveTree}
           ${!this._config.hide_offline_nodes && unassigned.length ? this._unassignedSection(unassigned) : ""}
         </div>
       </div>`);
@@ -575,7 +576,7 @@ class FritzMeshCard extends HTMLElement {
    * @param {Object} node - A slave MeshNode object from topology attributes.
    * @returns {string} HTML string for the slave section.
    */
-  _slaveSection(node) {
+  _slaveSection(node, childSections = "") {
     const clients  = this._sortClients(this._visibleClients([...(node?.clients ?? [])]));
     const nodeRates = this._nodeRateLabel(node);
     // parent_link_type is "WLAN" or "LAN"; default to "LAN" if missing.
@@ -607,7 +608,48 @@ class FritzMeshCard extends HTMLElement {
             ? clients.map((c) => this._clientRow(c)).join("")
             : '<div class="no-clients">No clients</div>'}
         </div>
+        ${childSections ? `<div class="children">${childSections}</div>` : ""}
       </div>`;
+  }
+
+  _buildSlaveTree(master, slaves) {
+    const byUid = new Map();
+    const childrenByParent = new Map();
+    const masterUid = String(master?.uid || "");
+
+    for (const node of slaves) {
+      const uid = String(node?.uid || "");
+      if (!uid) continue;
+      byUid.set(uid, node);
+    }
+
+    const pushChild = (parentUid, node) => {
+      if (!childrenByParent.has(parentUid)) childrenByParent.set(parentUid, []);
+      childrenByParent.get(parentUid).push(node);
+    };
+
+    for (const node of slaves) {
+      const parentUidRaw = String(node?.parent_uid || "");
+      const parentUid = parentUidRaw && byUid.has(parentUidRaw) ? parentUidRaw : masterUid;
+      pushChild(parentUid, node);
+    }
+
+    for (const [parentUid, nodes] of childrenByParent.entries()) {
+      childrenByParent.set(parentUid, this._sortSlaveNodes(nodes));
+    }
+
+    const visited = new Set();
+    const renderChildren = (parentUid) => {
+      const children = childrenByParent.get(parentUid) || [];
+      return children.map((node) => {
+        const uid = String(node?.uid || "");
+        if (!uid || visited.has(uid)) return "";
+        visited.add(uid);
+        return this._slaveSection(node, renderChildren(uid));
+      }).join("");
+    };
+
+    return renderChildren(masterUid);
   }
 
   // ── Unassigned section ─────────────────────────────────────────────────────
@@ -1645,6 +1687,18 @@ ha-card {
      vertical backbone without a visible gap. */
   margin-left: -22px;
   padding-left: 0;
+}
+
+/* Nested repeater branches (slave-of-slave) */
+.children {
+  margin-left: 10px;
+  padding-left: 18px;
+  border-left: 2px solid var(--green);
+}
+:host([data-size="compact"]) .children {
+  margin-left: 0;
+  padding-left: 10px;
+  border-left: 1px solid var(--green-fade);
 }
 
 /* ── Individual client row ── */

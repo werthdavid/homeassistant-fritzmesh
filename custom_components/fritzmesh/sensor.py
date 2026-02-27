@@ -517,6 +517,7 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
             ]
             mesh_nodes.append(
                 {
+                    "uid":              node.uid,
                     "name":             node.name,
                     "mac":              node.mac,
                     "ip":               node.ip,
@@ -524,8 +525,10 @@ class FritzMeshTopologySensor(CoordinatorEntity[FritzMeshCoordinator], SensorEnt
                     "model":            node.model,          # hardware model string
                     "vendor":           node.vendor,
                     "firmware":         node.firmware,
+                    "parent_uid":       node.parent_uid,
                     "parent_link_type": node.parent_link_type,  # "WLAN"/"LAN" for slaves
                     "parent_link_state": node.parent_link_state,  # "CONNECTED"/"DISCONNECTED"
+                    "parent_interface_name": node.parent_interface_name,
                     "parent_cur_rx_kbps": node.parent_cur_rx_kbps,
                     "parent_cur_tx_kbps": node.parent_cur_tx_kbps,
                     "parent_max_rx_kbps": node.parent_max_rx_kbps,

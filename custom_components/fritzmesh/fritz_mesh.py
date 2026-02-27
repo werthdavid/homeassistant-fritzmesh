@@ -396,13 +396,22 @@ def parse_mesh_topology(raw: dict) -> MeshTopology:
                             )
 
                     elif n1_role == "slave" and n2_role == "slave":
-                        # Daisy-chained slaves: we don't know the depth order
-                        # definitively, so we use a simple heuristic: the node
-                        # appearing as n1 is treated as upstream of n2.
-                        if n2 not in mesh_node_parent:
-                            mesh_node_parent[n2] = (
-                                n1, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
-                            )
+                        # Daisy-chained slaves: infer direction from interface
+                        # naming when possible. "UPLINK:*" belongs to the
+                        # downstream node, so n1 is child of n2 in that case.
+                        iface_name_u = iface_name.upper()
+                        if "UPLINK" in iface_name_u:
+                            if n1 not in mesh_node_parent:
+                                mesh_node_parent[n1] = (
+                                    n2, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
+                                )
+                        else:
+                            # Fallback heuristic when interface naming is not
+                            # informative: keep previous behaviour.
+                            if n2 not in mesh_node_parent:
+                                mesh_node_parent[n2] = (
+                                    n1, iface_type, state, iface_name, cur_rx, cur_tx, max_rx, max_tx
+                                )
 
     # ── Assign accumulated data back to MeshNode objects ────────────────────
 

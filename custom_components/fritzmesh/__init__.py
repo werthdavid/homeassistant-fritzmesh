@@ -54,7 +54,9 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = ["sensor", "binary_sensor"]
 
-_CARD_URL = "/fritzmesh/fritzmesh-card.js"
+_CARD_STATIC_URL = "/fritzmesh/fritzmesh-card.js"
+_CARD_VERSION = "1.9.3"
+_CARD_URL = f"{_CARD_STATIC_URL}?v={_CARD_VERSION}"
 _CARD_FILE = Path(__file__).parent / "www" / "fritzmesh-card.js"
 
 
@@ -87,7 +89,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(_CARD_URL, str(_CARD_FILE), cache_headers=False)]
+            [StaticPathConfig(_CARD_STATIC_URL, str(_CARD_FILE), cache_headers=False)]
         )
     except Exception as exc:
         _LOGGER.warning(
@@ -131,7 +133,7 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, url: str) -> bo
 
         # Guard against duplicate entries accumulating across HA restarts.
         for item in resources.async_items():
-            if _strip_query(item.get("url", "")) == url:
+            if _strip_query(item.get("url", "")) == _strip_query(url):
                 _LOGGER.debug("fritzmesh-card already in Lovelace resources, skipping")
                 return True
 

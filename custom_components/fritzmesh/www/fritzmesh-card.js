@@ -37,7 +37,7 @@
  *         → _clientRow()     (individual device rows with speed/band label)
  */
 
-const CARD_VERSION = "1.9.8";
+const CARD_VERSION = "1.9.9";
 
 // Top-level guard: runs the instant the script is parsed, before any class
 // or constant definition. Visible in console at "Info" level.
@@ -98,6 +98,19 @@ const ICON = {
   transfer: `<svg viewBox="0 0 24 24" fill="currentColor">
     <path d="M7 6h10l-3.5-3.5 1.4-1.4L21.8 8l-6.9 6.9-1.4-1.4L17 10H7V6zm10
     8H7l3.5 3.5-1.4 1.4L2.2 12l6.9-6.9 1.4 1.4L7 10h10v4z"/>
+  </svg>`,
+
+  // Guest/suitcase icon - shown if connected to guest wifi
+  guest: `<svg viewBox="0 0 24 24" fill="currentColor">
+    <path d="M9,7 C9,4.5 15,4.5 15,7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <rect x="3" y="8" width="18" height="12" rx="2" fill="currentColor" />
+    <rect x="7" y="8" width="1.5" height="12" fill="#ffffff" />
+    <rect x="15" y="8" width="1.5" height="12" fill="#ffffff" />
+  </svg>`,
+
+  // home icon - shown if connected to non-guest wifi
+  home: `<svg viewBox="0 0 24 24" fill="currentColor">
+    <path d="M3,11.5 C2.2,11.5 2,10.7 2.5,10.2 L10.8,2.7 C11.5,2.1 12.5,2.1 13.2,2.7 L21.5,10.2 C22,10.7 21.8,11.5 21,11.5 L19.5,11.5 L19.5,20 C19.5,21.1 18.6,22 17.5,22 L14.5,22 C13.9,22 13.5,21.6 13.5,21 L13.5,16 C13.5,15.2 12.8,14.5 12,14.5 C11.2,14.5 10.5,15.2 10.5,16 L10.5,21 C10.5,21.6 10.1,22 9.5,22 L6.5,22 C5.4,22 4.5,21.1 4.5,20 L4.5,11.5 Z" />
   </svg>`,
 };
 
@@ -721,6 +734,7 @@ class FritzMeshCard extends HTMLElement {
     const on    = client.connection_state === "CONNECTED";  // true → active/bright
     const wifi  = client.connection_type  === "WLAN";       // true → WiFi, false → LAN
     const label = connLabel(client);                         // "5 GHz → 867 Mbit/s" etc.
+    const guest = client.interface_name.startsWith("AP_GUEST")  // true → if connected via guest WiFi
     const name  = client.name || client.mac || "?";         // display name fallback chain
     const ip = client.ip || "";
     const entityId = this._resolveMoreInfoEntityId(client);
@@ -752,6 +766,8 @@ class FritzMeshCard extends HTMLElement {
             >${esc(ip)}</button>`
           : ""
         }
+      <!-- guest / home label -->
+      <span class="cl-icon">${guest ? ICON.guest : ICON.home}</span>
       </div>`;
   }
 
